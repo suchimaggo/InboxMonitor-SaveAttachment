@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#edf2ef">
+  <title>Inbox Reader</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Inbox Reader home">
+        <span class="brand-mark" aria-hidden="true">IR</span>
+        <span>INBOX READER</span>
+      </a>
+      <div class="local-indicator"><span class="local-dot"></span> LOCAL ONLY</div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">MAIL AUTOMATION <span>/</span> ATTACHMENTS</p>
+          <h1 id="page-title">Inbox monitor</h1>
+          <p class="intro-copy">Watch for matching mail and collect its attachments in one place.</p>
+        </div>
+        <div class="status-block" aria-live="polite">
+          <span class="status-led" id="status-led"></span>
+          <div>
+            <span class="status-label" id="status-label">Connecting</span>
+            <span class="status-detail" id="status-detail">Reading local configuration</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-bar" aria-label="Monitor controls">
+        <div class="control-copy">
+          <span class="control-kicker">MONITOR</span>
+          <span class="control-title" id="control-title">Ready when you are</span>
+        </div>
+        <div class="actions">
+          <button class="button button-start" id="start-button" type="button">
+            <span class="button-symbol" aria-hidden="true">▶</span> Start monitoring
+          </button>
+          <button class="button button-stop" id="stop-button" type="button" disabled>
+            <span class="button-symbol" aria-hidden="true">■</span> Stop
+          </button>
+        </div>
+      </section>
+
+      <section class="workspace" aria-label="Inbox monitor details">
+        <aside class="settings-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">CURRENT SETUP</p>
+              <h2>Mailbox</h2>
+            </div>
+            <span class="setup-index">01</span>
+          </div>
+          <dl class="settings-list">
+            <div class="setting-row">
+              <dt>Provider</dt>
+              <dd id="provider-value">—</dd>
+            </div>
+            <div class="setting-row">
+              <dt>Account</dt>
+              <dd id="email-value">—</dd>
+            </div>
+            <div class="setting-row">
+              <dt>Subject contains</dt>
+              <dd id="filter-value">—</dd>
+            </div>
+            <div class="setting-row">
+              <dt>Check interval</dt>
+              <dd id="interval-value">—</dd>
+            </div>
+          </dl>
+          <div class="destination">
+            <span class="destination-icon" aria-hidden="true">↳</span>
+            <div>
+              <span class="destination-label">SAVE LOCATION</span>
+              <code id="folder-value">—</code>
+            </div>
+          </div>
+        </aside>
+
+        <section class="activity-panel" aria-labelledby="activity-title">
+          <div class="section-heading activity-heading">
+            <div>
+              <p class="eyebrow">LIVE FEED</p>
+              <h2 id="activity-title">Recent activity</h2>
+            </div>
+            <span class="feed-count" id="feed-count">0 EVENTS</span>
+          </div>
+          <ol class="activity-list" id="activity-list" aria-live="polite" aria-relevant="additions text">
+            <li class="empty-state">Waiting for monitor activity.</li>
+          </ol>
+        </section>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>INBOX READER <span class="footer-separator">·</span> LOCAL ATTACHMENT SERVICE</span>
+      <span id="connection-state">Connecting to service</span>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,12 @@
+@baseUrl = http://127.0.0.1:5087
+
+### Get monitor status
+GET {{baseUrl}}/api/status
+
+### Start inbox monitoring
+POST {{baseUrl}}/api/start
+Origin: http://127.0.0.1:5087
+
+### Stop inbox monitoring
+POST {{baseUrl}}/api/stop
+Origin: http://127.0.0.1:5087
