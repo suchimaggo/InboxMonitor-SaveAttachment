@@ -12,6 +12,8 @@ var options = new WebApplicationOptions
 
 var builder = WebApplication.CreateBuilder(options);
 builder.WebHost.UseUrls("http://127.0.0.1:5087");
+builder.Services.AddHttpClient("case-tracking", client =>
+    client.Timeout = TimeSpan.FromMinutes(10));
 
 var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)

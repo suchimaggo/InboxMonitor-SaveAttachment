@@ -1,14 +1,14 @@
 :root {
   color-scheme: light;
-  --paper: #edf2ef;
-  --surface: #f8faf8;
-  --ink: #182923;
-  --muted: #64766f;
-  --line: #d3ded8;
-  --green: #176d53;
-  --green-dark: #10543f;
-  --green-wash: #dcece4;
-  --coral: #c75e43;
+  --paper: #eff2f6;
+  --surface: #ffffff;
+  --ink: #0c2139;
+  --muted: #555c63;
+  --line: #dce4ed;
+  --green: #008fd5;
+  --green-dark: #004aa1;
+  --green-wash: #e6f4fc;
+  --coral: #b4473a;
   --coral-wash: #f7e5df;
   --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   --display: Georgia, "Times New Roman", serif;
@@ -55,16 +55,8 @@ button { font: inherit; }
   text-decoration: none;
 }
 
-.brand-mark {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--green);
-  color: var(--green);
-  font-family: var(--display);
-  font-size: 12px;
-}
+.brand-logo { display: block; width: 118px; height: auto; }
+.brand-caption { padding-left: 13px; border-left: 1px solid var(--line); color: var(--muted); font-size: 9px; letter-spacing: 0.08em; }
 
 .local-indicator, .eyebrow, .control-kicker, .destination-label, .feed-count, .footer {
   font-family: var(--mono);
@@ -108,7 +100,7 @@ h1 { margin-bottom: 10px; font-family: var(--display); font-size: 46px; font-wei
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  border: 1px solid #c8d8cf;
+  border: 1px solid #b9d8e7;
   background: var(--green-wash);
   animation: enter 520ms 120ms ease-out both;
 }
@@ -119,7 +111,7 @@ h1 { margin-bottom: 10px; font-family: var(--display); font-size: 46px; font-wei
 .actions { display: flex; gap: 9px; }
 .button { min-height: 42px; padding: 0 15px; display: inline-flex; align-items: center; gap: 9px; border: 1px solid transparent; cursor: pointer; font-size: 12px; font-weight: 700; transition: background 140ms ease, color 140ms ease, transform 140ms ease; }
 .button:hover:not(:disabled) { transform: translateY(-1px); }
-.button:focus-visible { outline: 3px solid #8cb7a4; outline-offset: 2px; }
+.button:focus-visible { outline: 3px solid #82c6e7; outline-offset: 2px; }
 .button:disabled { cursor: not-allowed; opacity: 0.48; }
 .button-start { color: white; background: var(--green); }
 .button-start:hover:not(:disabled) { background: var(--green-dark); }
@@ -137,7 +129,7 @@ h2 { margin: 0 0 14px; font-family: var(--display); font-size: 23px; font-weight
 .setting-row { min-height: 53px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid #dce4df; }
 .setting-row dt { color: var(--muted); font-size: 12px; }
 .setting-row dd { margin: 0; max-width: 62%; overflow-wrap: anywhere; text-align: right; font-weight: 650; font-size: 12px; }
-.destination { min-height: 72px; padding: 13px 14px; display: flex; align-items: flex-start; gap: 11px; border-left: 2px solid var(--green); background: #e4ece7; }
+.destination { min-height: 72px; padding: 13px 14px; display: flex; align-items: flex-start; gap: 11px; border-left: 2px solid var(--green); background: #e6eaef; }
 .destination-icon { color: var(--green); font-size: 18px; line-height: 1; }
 .destination-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 9px; font-weight: 700; }
 .destination code { display: block; overflow-wrap: anywhere; color: var(--ink); font-family: var(--mono); font-size: 11px; line-height: 1.5; }
@@ -158,6 +150,7 @@ h2 { margin: 0 0 14px; font-family: var(--display); font-size: 23px; font-weight
 @media (max-width: 700px) {
   .shell { width: min(100% - 36px, 540px); }
   .topbar { height: 66px; }
+  .brand-logo { width: 100px; }
   .intro { min-height: 0; padding: 36px 0 27px; align-items: flex-start; flex-direction: column; gap: 22px; }
   h1 { font-size: 39px; }
   .status-block { min-width: 0; padding: 0 0 0 12px; }

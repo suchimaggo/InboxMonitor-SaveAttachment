@@ -15,7 +15,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="UtilityDashboard\**\*.cs" />
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="UtilityDashboard\**\*;deploy\**\*;artifacts\**\*;**\bin\**\*;**\obj\**\*" />
+    <None Remove="UtilityDashboard\**\*;deploy\**\*;artifacts\**\*;**\bin\**\*;**\obj\**\*" />
   </ItemGroup>
 
 </Project>

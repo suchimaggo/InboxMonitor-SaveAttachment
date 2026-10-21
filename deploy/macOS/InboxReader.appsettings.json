@@ -1,0 +1,15 @@
+{
+  "InboxReader": {
+    "Provider": "Zoho",
+    "Email": "",
+    "Password": "",
+    "ImapHost": "imap.zoho.com.au",
+    "ImapPort": 993,
+    "OutlookClientId": "",
+    "OutlookTenantId": "consumers",
+    "SubjectFilter": "",
+    "ScanFromDate": "2026-10-15T00:00:00",
+    "OutputFolder": "InboxAttachments",
+    "PollIntervalSeconds": 60
+  }
+}

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eff2f6">
+  <title>Loan Processing · Utility Deck</title>
+  <link rel="stylesheet" href="/loan/styles.css">
+  <script src="/loan/app.js" defer></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Back to OM Financials utilities">
+        <img class="brand-logo" src="/images/om-financials-logo.webp" alt="OM Financials">
+        <span class="brand-caption">LOAN PROCESSING</span>
+      </a>
+      <a class="back-link" href="/">← All utilities</a>
+    </header>
+
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">DOCUMENTS <span>/</span> LOAN PROCESSING</p>
+          <h1>Organize loan<br>documents.</h1>
+          <p class="intro-description">Classify documents and sort them into folders in one pass.</p>
+        </div>
+        <aside class="status-card" aria-live="polite">
+          <span class="eyebrow">PROCESSOR</span>
+          <strong id="run-status">Checking availability…</strong>
+          <span id="status-detail">Connecting to the local processor.</span>
+        </aside>
+      </section>
+
+      <section class="workspace">
+        <form id="process-form">
+          <label for="folder-path">Folder to organize</label>
+          <div class="path-row">
+            <input id="folder-path" name="folderPath" type="text" autocomplete="off"
+              placeholder="C:\Path\To\Loan Documents" required>
+            <button id="start-button" type="submit">Start processing <span aria-hidden="true">→</span></button>
+          </div>
+          <p class="help-text">Enter the full Windows path. Supported files include PDF, JPEG, PNG, and TXT.</p>
+        </form>
+
+        <div class="warning" role="note">
+          <span class="warning-mark" aria-hidden="true">!</span>
+          <p><strong>Files will be changed.</strong> The processor may move and rename documents in this folder. Review the path and make sure you have a backup before continuing.</p>
+        </div>
+      </section>
+
+      <section class="activity-section" aria-labelledby="activity-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">LIVE OUTPUT</p>
+            <h2 id="activity-title">Processing activity</h2>
+          </div>
+          <span id="activity-count" class="activity-count">0 lines</span>
+        </div>
+        <p id="page-error" class="page-error" role="alert" hidden></p>
+        <pre id="activity-log" class="activity-log" aria-live="polite">No processing activity yet.</pre>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>LOAN PROCESSING <span class="footer-separator">·</span> LOCAL ONLY</span>
+      <span>A report is saved in the selected folder after processing.</span>
+    </footer>
+  </div>
+</body>
+</html>

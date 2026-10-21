@@ -1,0 +1,17 @@
+{
+  "InboxReader": {
+    "Provider": "Zoho",
+    "Email": "",
+    "Password": "",
+    "ImapHost": "imap.zoho.com.au",
+    "ImapPort": 993,
+    "OutlookClientId": "",
+    "OutlookTenantId": "consumers",
+    "SubjectFilter": "",
+    "ScanFromDate": "2026-10-15T00:00:00",
+    "OutputFolder": "Z:\\LoanProcessing-AutoMation\\InboxAttachments",
+    "PollIntervalSeconds": 60,
+    "CaseRootFolder": "Z:\\LoanProcessing-AutoMation",
+    "TrackingRefreshUrl": "http://127.0.0.1:5086/api/case-tracking/refresh"
+  }
+}

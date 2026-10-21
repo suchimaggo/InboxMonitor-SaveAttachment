@@ -59,7 +59,8 @@ function renderStatus(status) {
   document.querySelector("#control-title").textContent = running ? "Inbox checks are active" : "Ready when you are";
   document.querySelector("#provider-value").textContent = status.provider;
   document.querySelector("#email-value").textContent = status.email || "Not configured";
-  document.querySelector("#filter-value").textContent = status.subjectFilter;
+  document.querySelector("#filter-value").textContent = status.caseSubjectFormat;
+  document.querySelector("#scan-from-value").textContent = status.scanFromDate.slice(0, 10);
   document.querySelector("#interval-value").textContent = `${status.pollIntervalSeconds} seconds`;
   document.querySelector("#folder-value").textContent = status.outputFolder;
   document.querySelector("#feed-count").textContent = `${status.activity.length} EVENTS`;

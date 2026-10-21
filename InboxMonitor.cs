@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Search;
@@ -7,8 +9,15 @@ using MimeKit;
 
 namespace InboxReader;
 
-public sealed class InboxMonitor(MailSettings settings, Action<string>? log = null)
+public sealed class InboxMonitor(
+    MailSettings settings,
+    Action<string>? log = null,
+    Func<CancellationToken, Task>? pollCompleted = null)
 {
+    private static readonly Regex CaseIdPattern = new(
+        @"\b(?:FHB|REFI|PUR|INV|CONST|OTHER)-[23456789A-HJ-NP-Z]{6}\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly JsonDocumentOptions CaseJsonOptions = new() { MaxDepth = 16 };
     private readonly OutlookTokenProvider? _tokenProvider =
         settings.Provider == MailProvider.Outlook ? new OutlookTokenProvider(settings, log) : null;
     private readonly Action<string> _log = log ?? Console.WriteLine;
@@ -18,14 +27,29 @@ public sealed class InboxMonitor(MailSettings settings, Action<string>? log = nu
         ValidateSettings();
 
         Directory.CreateDirectory(settings.OutputFolder);
-        _log($"Monitoring {settings.Provider} inbox for '{settings.Email}' (subject contains '{settings.SubjectFilter}').");
-        _log($"Saving attachments to: {settings.OutputFolder}");
+        if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
+            Directory.CreateDirectory(ResolveCaseRootFolder());
+        _log($"Monitoring {settings.Provider} inbox for messages delivered on or after {settings.ScanFromDate:yyyy-MM-dd}, matching case subjects in the format Client Name-CASE-ID.");
+        _log($"Unmatched email attachments will be saved to: {settings.OutputFolder}");
+        if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
+            _log($"Case attachment tracking is enabled: {ResolveCaseRootFolder()}");
 
         while (!ct.IsCancellationRequested)
         {
             try
             {
                 await CheckInboxAsync(ct);
+                if (pollCompleted is not null)
+                {
+                    try
+                    {
+                        await pollCompleted(ct);
+                    }
+                    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+                    {
+                        _log($"[{DateTime.Now:T}] Case tracking refresh failed: {exception.Message}");
+                    }
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -82,7 +106,7 @@ public sealed class InboxMonitor(MailSettings settings, Action<string>? log = nu
         var inbox = client.Inbox;
         await inbox.OpenAsync(FolderAccess.ReadOnly, ct);
 
-        var uids = await inbox.SearchAsync(SearchQuery.SubjectContains(settings.SubjectFilter), ct);
+        var uids = await inbox.SearchAsync(SearchQuery.DeliveredAfter(settings.ScanFromDate.Date), ct);
         var saved = 0;
 
         if (uids.Count > 0)
@@ -92,16 +116,35 @@ public sealed class InboxMonitor(MailSettings settings, Action<string>? log = nu
 
             foreach (var summary in summaries)
             {
-                // Server-side SEARCH may be fuzzy; enforce the filter locally too.
                 var subject = summary.Envelope?.Subject ?? "";
-                if (!subject.Contains(settings.SubjectFilter, StringComparison.OrdinalIgnoreCase))
-                    continue;
                 if (!summary.Attachments.Any())
                     continue;
 
                 var date = summary.Envelope?.Date?.LocalDateTime ?? DateTime.Now;
                 var folderName = $"{date:yyyyMMdd_HHmmss}_{Sanitize(subject, 60)}_{summary.UniqueId.Id}";
-                var folderPath = Path.Combine(settings.OutputFolder, folderName);
+                string? caseFolder = null;
+                string? expectedCaseSubject = null;
+                if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
+                {
+                    var caseIdMatches = CaseIdPattern.Matches(subject);
+                    if (caseIdMatches.Count == 1 &&
+                        TryResolveCaseFolder(caseIdMatches[0].Value, out caseFolder, out expectedCaseSubject))
+                    {
+                        if (!subject.Contains(expectedCaseSubject!, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _log($"[{DateTime.Now:T}] Subject \"{subject}\" contains case ID {caseIdMatches[0].Value} but not the matching client-case reference \"{expectedCaseSubject}\"; saving attachments to the unmatched inbox folder.");
+                            caseFolder = null;
+                        }
+                    }
+                    else if (caseIdMatches.Count > 0)
+                    {
+                        _log($"[{DateTime.Now:T}] Subject \"{subject}\" contains an ambiguous or unknown case ID; saving attachments to the unmatched inbox folder.");
+                    }
+                }
+
+                var folderPath = caseFolder is null
+                    ? Path.Combine(settings.OutputFolder, folderName)
+                    : Path.Combine(caseFolder, "Received", folderName);
 
                 if (Directory.Exists(folderPath))
                     continue;
@@ -118,6 +161,55 @@ public sealed class InboxMonitor(MailSettings settings, Action<string>? log = nu
 
         _log($"[{DateTime.Now:T}] Check complete. {saved} new email(s) processed.");
         await client.DisconnectAsync(true, ct);
+    }
+
+    private string ResolveCaseRootFolder() =>
+        Path.GetFullPath(settings.CaseRootFolder!, AppContext.BaseDirectory);
+
+    private bool TryResolveCaseFolder(string caseId, out string? caseFolder, out string? expectedCaseSubject)
+    {
+        caseFolder = null;
+        expectedCaseSubject = null;
+        var root = ResolveCaseRootFolder();
+        if (!Directory.Exists(root))
+            return false;
+
+        var matchingRecords = Directory.EnumerateFiles(root, "case.json", SearchOption.AllDirectories)
+            .Where(path => string.Equals(
+                Path.GetFileName(Path.GetDirectoryName(path)),
+                caseId,
+                StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToArray();
+        if (matchingRecords.Length != 1)
+            return false;
+
+        var recordPath = matchingRecords[0];
+        var candidate = Path.GetDirectoryName(recordPath);
+        if (candidate is null || !File.Exists(recordPath))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(recordPath), CaseJsonOptions);
+            if (!document.RootElement.TryGetProperty("caseId", out var storedId) ||
+                storedId.ValueKind != JsonValueKind.String ||
+                !string.Equals(storedId.GetString(), caseId, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (!document.RootElement.TryGetProperty("clientName", out var storedClientName) ||
+                storedClientName.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(storedClientName.GetString()))
+                return false;
+            expectedCaseSubject = $"{storedClientName.GetString()!.Trim()}-{caseId}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _log($"[{DateTime.Now:T}] Could not validate case record for {caseId}: {exception.Message}");
+            return false;
+        }
+
+        caseFolder = candidate;
+        return true;
     }
 
     private static async Task<int> SaveAttachmentsAsync(MimeMessage message, string folderPath, CancellationToken ct)

@@ -22,9 +22,12 @@ public sealed class MailSettings
     public string? OutlookClientId { get; set; }
     public string OutlookTenantId { get; set; } = "consumers";
 
-    public string SubjectFilter { get; set; } = "Welcome";
-    public string OutputFolder { get; set; } = @"C:\Personal\InboxAttachments";
+    public string SubjectFilter { get; set; } = "";
+    public DateTime ScanFromDate { get; set; } = new(2026, 10, 15);
+    public string OutputFolder { get; set; } = @"Z:\LoanProcessing-AutoMation\InboxAttachments";
     public int PollIntervalSeconds { get; set; } = 60;
+    public string? CaseRootFolder { get; set; } = @"Z:\LoanProcessing-AutoMation";
+    public string? TrackingRefreshUrl { get; set; }
 
     public string ResolveHost()
     {

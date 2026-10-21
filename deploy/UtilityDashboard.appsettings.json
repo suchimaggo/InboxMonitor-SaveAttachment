@@ -1,0 +1,41 @@
+{
+  "Utilities": [
+    {
+      "Name": "Inbox Reader",
+      "Description": "Monitor your inbox and collect attachments from matching messages.",
+      "Url": "http://127.0.0.1:5087/",
+      "HealthUrl": "http://127.0.0.1:5087/api/status"
+    },
+    {
+      "Name": "New Loan Case",
+      "Description": "Create a loan case, collect its document checklist, and prepare a Zoho email draft.",
+      "Url": "http://127.0.0.1:5088/",
+      "HealthUrl": "http://127.0.0.1:5088/api/config"
+    },
+    {
+      "Name": "Loan Application Completeness Checker",
+      "Description": "Review document candidates against each case's requested checklist.",
+      "Url": "http://127.0.0.1:5089/",
+      "HealthUrl": "http://127.0.0.1:5089/api/health"
+    },
+    {
+      "Name": "Loan Processing",
+      "Description": "Sort and rename loan documents in a selected folder.",
+      "Url": "http://127.0.0.1:5086/loan/",
+      "HealthUrl": "http://127.0.0.1:5086/api/loan-processing/health"
+    }
+  ],
+  "LoanProcessing": {
+    "ExecutablePath": "..\\LoanProcessing\\LoanProcessing-Utility.exe"
+  },
+  "CaseTracking": {
+    "CasesPath": "Z:\\LoanProcessing-AutoMation",
+    "CheckerScanUrl": "http://127.0.0.1:5089/api/scan-case"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}

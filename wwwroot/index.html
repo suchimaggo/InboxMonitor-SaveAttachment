@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#edf2ef">
+  <meta name="theme-color" content="#eff2f6">
   <title>Inbox Reader</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
@@ -12,8 +12,8 @@
   <div class="shell">
     <header class="topbar">
       <a class="brand" href="/" aria-label="Inbox Reader home">
-        <span class="brand-mark" aria-hidden="true">IR</span>
-        <span>INBOX READER</span>
+        <img class="brand-logo" src="/images/om-financials-logo.webp" alt="OM Financials">
+        <span class="brand-caption">INBOX READER</span>
       </a>
       <div class="local-indicator"><span class="local-dot"></span> LOCAL ONLY</div>
     </header>
@@ -68,8 +68,12 @@
               <dd id="email-value">—</dd>
             </div>
             <div class="setting-row">
-              <dt>Subject contains</dt>
+              <dt>Case subject format</dt>
               <dd id="filter-value">—</dd>
+            </div>
+            <div class="setting-row">
+              <dt>Scan messages from</dt>
+              <dd id="scan-from-value">—</dd>
             </div>
             <div class="setting-row">
               <dt>Check interval</dt>

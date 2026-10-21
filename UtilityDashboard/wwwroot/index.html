@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eff2f6">
+  <title>OM Financials Utilities</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="OM Financials utilities home">
+        <img class="brand-logo" src="/images/om-financials-logo.webp" alt="OM Financials">
+        <span class="brand-caption">LOCAL UTILITIES</span>
+      </a>
+      <div class="local-badge"><span class="local-dot"></span> YOUR LOCAL WORKSPACE</div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div class="intro-copy">
+          <p class="eyebrow">PERSONAL TOOLS <span>/</span> HOME</p>
+          <h1 id="page-title">Your utilities,<br>all in one place.</h1>
+          <p class="intro-description">A simple launchpad for the tools that keep your work moving.</p>
+        </div>
+        <aside class="overview" aria-live="polite">
+          <span class="overview-icon" aria-hidden="true">↗</span>
+          <span class="overview-label">READY TO LAUNCH</span>
+          <strong id="utility-count">Loading utilities</strong>
+          <span id="updated-at">Checking local services…</span>
+        </aside>
+      </section>
+
+      <section class="tools-section" aria-labelledby="tools-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">YOUR TOOLKIT</p>
+            <h2 id="tools-title">Available utilities</h2>
+          </div>
+          <span class="section-index">01 — <span id="total-count">…</span></span>
+        </div>
+        <div class="utility-grid" id="utility-grid" aria-live="polite" aria-busy="true">
+          <p class="loading-message">Connecting to your local workspace…</p>
+        </div>
+        <p class="load-error" id="load-error" role="status" hidden></p>
+      </section>
+
+      <section class="future-note" aria-label="Add more utilities">
+        <span class="future-mark" aria-hidden="true">+</span>
+        <div>
+          <p class="eyebrow">GROWS WITH YOU</p>
+          <h2>More tools, same home.</h2>
+          <p>Add another utility in the dashboard configuration and it will appear here.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>OM FINANCIALS <span class="footer-separator">·</span> PRIVATE LOCAL DASHBOARD</span>
+      <span>Refreshes service status every 15 seconds</span>
+    </footer>
+  </div>
+</body>
+</html>

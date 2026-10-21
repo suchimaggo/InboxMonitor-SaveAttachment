@@ -7,7 +7,9 @@ public interface IInboxMonitorControl
     Task<bool> StopAsync(CancellationToken cancellationToken);
 }
 
-public sealed class InboxMonitorControl(MailSettings settings) : IInboxMonitorControl, IAsyncDisposable
+public sealed class InboxMonitorControl(
+    MailSettings settings,
+    IHttpClientFactory httpClientFactory) : IInboxMonitorControl, IAsyncDisposable
 {
     private const int MaxActivityEntries = 200;
     private readonly object _gate = new();
@@ -24,7 +26,8 @@ public sealed class InboxMonitorControl(MailSettings settings) : IInboxMonitorCo
                 _isRunning,
                 settings.Provider.ToString(),
                 settings.Email,
-                settings.SubjectFilter,
+                "Client Name-CASE-ID",
+                settings.ScanFromDate.Date,
                 settings.OutputFolder,
                 settings.PollIntervalSeconds,
                 _activity.ToArray());
@@ -70,7 +73,7 @@ public sealed class InboxMonitorControl(MailSettings settings) : IInboxMonitorCo
     {
         try
         {
-            await new InboxMonitor(settings, AddActivity).RunAsync(cancellationToken);
+            await new InboxMonitor(settings, AddActivity, RefreshCaseTrackingAsync).RunAsync(cancellationToken);
         }
         catch (Exception exception)
         {
@@ -87,6 +90,17 @@ public sealed class InboxMonitorControl(MailSettings settings) : IInboxMonitorCo
                 AddActivityLocked("Monitor stopped.");
             }
         }
+    }
+
+    private async Task RefreshCaseTrackingAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(settings.TrackingRefreshUrl))
+            return;
+
+        var client = httpClientFactory.CreateClient("case-tracking");
+        using var response = await client.PostAsync(settings.TrackingRefreshUrl, content: null, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"Dashboard returned HTTP {(int)response.StatusCode}.");
     }
 
     private void AddActivity(string message)
@@ -111,7 +125,8 @@ public sealed record MonitorStatusResponse(
     bool IsRunning,
     string Provider,
     string Email,
-    string SubjectFilter,
+    string CaseSubjectFormat,
+    DateTime ScanFromDate,
     string OutputFolder,
     int PollIntervalSeconds,
     IReadOnlyList<MonitorLogEntryResponse> Activity);
