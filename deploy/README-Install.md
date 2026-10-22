@@ -56,7 +56,7 @@ Use the **Inbox Utilities** Desktop or Start Menu shortcut. It starts Inbox Read
 
 <http://127.0.0.1:5086>
 
-Select **New Loan Case** to create a loan case and Zoho draft. Ask the client to include the generated case ID in every follow-up email subject. The Dashboard checks received attachments against that case's requested-document list after Inbox Reader polls. Filename/content matches are suggestions and require staff review; unreadable or unsupported files are identified, not silently treated as received. No automatic client reminders are sent. Select **Loan Processing** to organize files; confirm before processing because it can move and rename them.
+Select **New Loan Case** to create a loan case and Zoho draft. Ask the client to include the generated case ID in every follow-up email subject. The Dashboard checks received attachments against that case's requested-document list after Inbox Reader polls. Filename/content matches are suggestions and require staff review; unreadable or unsupported files are identified, not silently treated as received. No automatic client reminders are sent. Select **Loan Processing** to organize files; confirm before processing because it can move and rename them. To reverse the latest completed run, enter the same folder path and select **Undo last run**. Undo checks that each moved file is unchanged and its original path is free before restoring it; files with conflicts are left in place, and empty destination folders are removed.
 
 To stop the web applications, use the **Stop Inbox Utilities** shortcut in the Start Menu. Complete any active Loan Processing job before stopping the apps.
 
