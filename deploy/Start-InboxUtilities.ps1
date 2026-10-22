@@ -46,11 +46,26 @@ $settings = Get-Content -LiteralPath $readerSettings -Raw | ConvertFrom-Json
 if ([string]::IsNullOrWhiteSpace($settings.InboxReader.Email)) {
     throw "Configure the InboxReader.Email value in '$readerSettings' before starting."
 }
-if ($settings.InboxReader.Provider -eq 'Zoho' -and [string]::IsNullOrWhiteSpace($settings.InboxReader.Password)) {
-    throw "Configure the Zoho app password in '$readerSettings' before starting."
+$mailExchangeServer = $settings.InboxReader.MailExchangeServer
+if ([string]::IsNullOrWhiteSpace($mailExchangeServer)) {
+    $mailExchangeServer = $settings.InboxReader.Provider
 }
-if ($settings.InboxReader.Provider -eq 'Outlook' -and [string]::IsNullOrWhiteSpace($settings.InboxReader.OutlookClientId)) {
-    throw "Configure OutlookClientId in '$readerSettings' before starting."
+switch -Regex ($mailExchangeServer) {
+    '^(?i:Zoho)$' {
+        if ([string]::IsNullOrWhiteSpace($settings.InboxReader.Password)) {
+            throw "Configure the Zoho app password in '$readerSettings' before starting."
+        }
+        break
+    }
+    '^(?i:Outlook)$' {
+        if ([string]::IsNullOrWhiteSpace($settings.InboxReader.OutlookClientId)) {
+            throw "Configure OutlookClientId in '$readerSettings' before starting."
+        }
+        break
+    }
+    default {
+        throw "MailExchangeServer must be 'Zoho' or 'Outlook' in '$readerSettings'."
+    }
 }
 
 $dataRoot = 'Z:\LoanProcessing-AutoMation'

@@ -8,13 +8,15 @@ public enum MailProvider
 
 public sealed class MailSettings
 {
+    // MailExchangeServer takes precedence; Provider remains for older configurations.
     public MailProvider Provider { get; set; } = MailProvider.Zoho;
+    public MailProvider? MailExchangeServer { get; set; }
     public string Email { get; set; } = "";
 
     // Zoho only: use an app-specific password. Prefer setting via env var InboxReader__Password.
     public string? Password { get; set; }
 
-    // Optional override; defaults depend on Provider.
+    // Zoho-only host override. Outlook uses the Exchange Online IMAP endpoint.
     public string? ImapHost { get; set; }
     public int ImapPort { get; set; } = 993;
 
@@ -29,15 +31,15 @@ public sealed class MailSettings
     public string? CaseRootFolder { get; set; } = @"Z:\LoanProcessing-AutoMation";
     public string? TrackingRefreshUrl { get; set; }
 
+    public MailProvider SelectedProvider => MailExchangeServer ?? Provider;
+
     public string ResolveHost()
     {
-        if (!string.IsNullOrWhiteSpace(ImapHost))
-            return ImapHost;
-
-        return Provider switch
+        return SelectedProvider switch
         {
             MailProvider.Outlook => "outlook.office365.com",
-            _ => "imap.zoho.com"
+            MailProvider.Zoho => string.IsNullOrWhiteSpace(ImapHost) ? "imap.zoho.com" : ImapHost,
+            _ => throw new InvalidOperationException($"Unsupported mail exchange: {SelectedProvider}.")
         };
     }
 }

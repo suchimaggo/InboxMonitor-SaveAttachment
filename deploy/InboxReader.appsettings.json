@@ -1,6 +1,7 @@
 {
   "InboxReader": {
     "Provider": "Zoho",
+    "MailExchangeServer": "Zoho",
     "Email": "",
     "Password": "",
     "ImapHost": "imap.zoho.com.au",

@@ -24,7 +24,7 @@ public sealed class InboxMonitorControl(
         {
             return new MonitorStatusResponse(
                 _isRunning,
-                settings.Provider.ToString(),
+                settings.SelectedProvider.ToString(),
                 settings.Email,
                 "Client Name-CASE-ID",
                 settings.ScanFromDate.Date,

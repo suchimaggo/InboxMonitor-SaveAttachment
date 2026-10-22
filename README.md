@@ -32,6 +32,9 @@ The dashboard starts Loan Processing as a background console process when you su
 
 New Loan Case saves each case's requested documents in `Z:\LoanProcessing-AutoMation\Clients\<CLIENT-NAME>\<CASE-ID>\case.json` and generates the Zoho draft subject as `Client Name-CASE-ID`. For example, Shyam Maggo's cases have separate folders such as `Clients\SHYAM-MAGGO\REFI-3Q8N5W` and `Clients\SHYAM-MAGGO\PUR-7K4M2P`. Inbox Reader searches only messages delivered on or after 15 October 2026 (inclusive), checks inbox subjects for exactly one saved client-and-case reference, stores matching attachments under that case's `Received` folder, and saves unmatched attachments under `Z:\LoanProcessing-AutoMation\InboxAttachments`. The Dashboard refreshes checklist candidates after Inbox Reader polls, using the Completeness Checker for text extraction and OCR. Matches remain suggestions for staff review; only PDFs, JPEG/PNG images, and text files are inspected, and no client reminders are sent.
 
+
+Inbox Reader supports Zoho and Microsoft 365/Exchange Online IMAP. Set `InboxReader:MailExchangeServer` to `Zoho` or `Outlook` in `appsettings.json`; it takes precedence over the legacy `InboxReader:Provider` setting. Zoho uses an app-specific password and optional `ImapHost` override. Outlook uses OAuth device-code sign-in, requires an Azure app registration with delegated IMAP permission, and connects to `outlook.office365.com`.
+
 ## Publish for a new Windows x64 laptop
 
 From the repository root, run:

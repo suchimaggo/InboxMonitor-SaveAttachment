@@ -19,7 +19,7 @@ public sealed class InboxMonitor(
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly JsonDocumentOptions CaseJsonOptions = new() { MaxDepth = 16 };
     private readonly OutlookTokenProvider? _tokenProvider =
-        settings.Provider == MailProvider.Outlook ? new OutlookTokenProvider(settings, log) : null;
+        settings.SelectedProvider == MailProvider.Outlook ? new OutlookTokenProvider(settings, log) : null;
     private readonly Action<string> _log = log ?? Console.WriteLine;
 
     public async Task RunAsync(CancellationToken ct)
@@ -29,7 +29,7 @@ public sealed class InboxMonitor(
         Directory.CreateDirectory(settings.OutputFolder);
         if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
             Directory.CreateDirectory(ResolveCaseRootFolder());
-        _log($"Monitoring {settings.Provider} inbox for messages delivered on or after {settings.ScanFromDate:yyyy-MM-dd}, matching case subjects in the format Client Name-CASE-ID.");
+        _log($"Monitoring {settings.SelectedProvider} inbox for messages delivered on or after {settings.ScanFromDate:yyyy-MM-dd}, matching case subjects in the format Client Name-CASE-ID.");
         _log($"Unmatched email attachments will be saved to: {settings.OutputFolder}");
         if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
             _log($"Case attachment tracking is enabled: {ResolveCaseRootFolder()}");
@@ -79,11 +79,14 @@ public sealed class InboxMonitor(
         if (string.IsNullOrWhiteSpace(settings.Email))
             throw new InvalidOperationException("Email is required.");
 
-        if (settings.Provider == MailProvider.Outlook && string.IsNullOrWhiteSpace(settings.OutlookClientId))
+        if (settings.SelectedProvider == MailProvider.Outlook && string.IsNullOrWhiteSpace(settings.OutlookClientId))
             throw new InvalidOperationException("OutlookClientId must be configured for the Outlook provider.");
 
-        if (settings.Provider != MailProvider.Outlook && string.IsNullOrWhiteSpace(settings.Password))
+        if (settings.SelectedProvider == MailProvider.Zoho && string.IsNullOrWhiteSpace(settings.Password))
             throw new InvalidOperationException("Password must be configured for the Zoho provider.");
+
+        if (settings.SelectedProvider is not (MailProvider.Zoho or MailProvider.Outlook))
+            throw new InvalidOperationException($"Unsupported mail exchange: {settings.SelectedProvider}.");
 
         if (string.IsNullOrWhiteSpace(settings.ResolveHost()))
             throw new InvalidOperationException("IMAP host is not configured.");

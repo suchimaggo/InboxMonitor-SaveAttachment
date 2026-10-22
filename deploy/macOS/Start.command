@@ -23,13 +23,35 @@ if ! grep -Eq '"Email"[[:space:]]*:[[:space:]]*"[^"]+"' "$SETTINGS"; then
   exit 1
 fi
 
-if grep -Eq '"Provider"[[:space:]]*:[[:space:]]*"Zoho"' "$SETTINGS" &&
-   ! grep -Eq '"Password"[[:space:]]*:[[:space:]]*"[^"]+"' "$SETTINGS"; then
-  echo "Configure the Zoho app-specific password in:"
-  echo "  $SETTINGS"
-  read -r -p "Press Return to close this window. "
-  exit 1
+MAIL_EXCHANGE_SERVER="$(sed -nE 's/^[[:space:]]*"MailExchangeServer"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$SETTINGS" | head -n 1)"
+if [[ -z "$MAIL_EXCHANGE_SERVER" ]]; then
+  MAIL_EXCHANGE_SERVER="$(sed -nE 's/^[[:space:]]*"Provider"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$SETTINGS" | head -n 1)"
 fi
+
+case "$MAIL_EXCHANGE_SERVER" in
+  [Zz][Oo][Hh][Oo])
+    if ! grep -Eq '"Password"[[:space:]]*:[[:space:]]*"[^"]+"' "$SETTINGS"; then
+      echo "Configure the Zoho app-specific password in:"
+      echo "  $SETTINGS"
+      read -r -p "Press Return to close this window. "
+      exit 1
+    fi
+    ;;
+  [Oo][Uu][Tt][Ll][Oo][Oo][Kk])
+    if ! grep -Eq '"OutlookClientId"[[:space:]]*:[[:space:]]*"[^"]+"' "$SETTINGS"; then
+      echo "Configure OutlookClientId in:"
+      echo "  $SETTINGS"
+      read -r -p "Press Return to close this window. "
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Set MailExchangeServer to Zoho or Outlook in:"
+    echo "  $SETTINGS"
+    read -r -p "Press Return to close this window. "
+    exit 1
+    ;;
+esac
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
 export InboxReader__OutputFolder="${HOME}/InboxAttachments"
