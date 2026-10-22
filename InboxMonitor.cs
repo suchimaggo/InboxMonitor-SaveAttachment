@@ -73,6 +73,9 @@ public sealed class InboxMonitor(
 
     private void ValidateSettings()
     {
+        if (settings.ScanFromDate == default)
+            throw new InvalidOperationException("ScanFromDate must be configured in the InboxReader settings.");
+
         if (string.IsNullOrWhiteSpace(settings.Email))
             throw new InvalidOperationException("Email is required.");
 

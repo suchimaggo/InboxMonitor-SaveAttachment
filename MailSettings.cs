@@ -23,7 +23,7 @@ public sealed class MailSettings
     public string OutlookTenantId { get; set; } = "consumers";
 
     public string SubjectFilter { get; set; } = "";
-    public DateTime ScanFromDate { get; set; } = new(2026, 10, 15);
+    public DateTime ScanFromDate { get; set; }
     public string OutputFolder { get; set; } = @"Z:\LoanProcessing-AutoMation\InboxAttachments";
     public int PollIntervalSeconds { get; set; } = 60;
     public string? CaseRootFolder { get; set; } = @"Z:\LoanProcessing-AutoMation";
