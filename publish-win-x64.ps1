@@ -40,8 +40,16 @@ Copy-Item (Join-Path $repositoryRoot 'deploy\InboxReader.appsettings.json') `
     (Join-Path $publishRoot 'InboxReader\appsettings.json') -Force
 Copy-Item (Join-Path $repositoryRoot 'deploy\UtilityDashboard.appsettings.json') `
     (Join-Path $publishRoot 'Dashboard\appsettings.json') -Force
-Copy-Item (Join-Path (Split-Path -Parent $checkerProject) 'loan-types.json') `
-    (Join-Path $publishRoot 'loan-types.json') -Force
+$templatesPublishPath = Join-Path $publishRoot 'Templates-DoNotDelete'
+New-Item -ItemType Directory -Path $templatesPublishPath -Force | Out-Null
+foreach ($templateFile in @(
+    'loan-types.json',
+    'checklist-templates.json',
+    'checklist-templates.defaults.json'
+)) {
+    Copy-Item (Join-Path (Split-Path -Parent $checkerProject) $templateFile) `
+        (Join-Path $templatesPublishPath $templateFile) -Force
+}
 
 foreach ($file in @('Install.ps1', 'Start-InboxUtilities.ps1', 'Stop-InboxUtilities.ps1', 'README-Install.md')) {
     Copy-Item (Join-Path $repositoryRoot "deploy\$file") (Join-Path $publishRoot $file) -Force
@@ -58,7 +66,22 @@ if (Test-Path -LiteralPath $archivePath) {
 }
 Compress-Archive -Path (Join-Path $publishRoot '*') -DestinationPath $archivePath -CompressionLevel Optimal
 
+$deploymentRoot = 'Z:\General\Deployment'
+$deploymentPath = Join-Path $deploymentRoot (Get-Date -Format 'dd-MM-yyyy')
+$testKitArchive = Join-Path $repositoryRoot 'artifacts\InboxUtilities-Test-Kit.zip'
+if (-not (Test-Path -LiteralPath $deploymentRoot -PathType Container)) {
+    throw "Deployment folder is unavailable: $deploymentRoot"
+}
+if (-not (Test-Path -LiteralPath $testKitArchive -PathType Leaf)) {
+    throw "The Inbox Utilities test kit package was not found: $testKitArchive"
+}
+New-Item -ItemType Directory -Path $deploymentPath -Force | Out-Null
+Copy-Item -LiteralPath $archivePath -Destination $deploymentPath -Force
+Copy-Item -LiteralPath $testKitArchive -Destination $deploymentPath -Force
+
 Write-Host "Published self-contained Windows x64 package:"
 Write-Host "  Folder: $publishRoot"
 Write-Host "  ZIP:    $archivePath"
+Write-Host "  Deployment folder: $deploymentPath"
+Write-Host "  Test kit: $testKitArchive"
 Write-Host 'Inbox Reader credentials are blank in the package; configure them after installation.'

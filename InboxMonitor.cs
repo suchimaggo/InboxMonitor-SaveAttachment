@@ -148,15 +148,22 @@ public sealed class InboxMonitor(
                     }
                 }
 
-                var folderPath = caseFolder is null
-                    ? Path.Combine(settings.OutputFolder, folderName)
-                    : Path.Combine(caseFolder, "Received", folderName);
+                var folderPath = caseFolder ?? Path.Combine(settings.OutputFolder, folderName);
+                var processedMarkerPath = caseFolder is null
+                    ? null
+                    : Path.Combine(caseFolder, ".inboxreader", $"{summary.UniqueId.Id}.processed");
 
-                if (Directory.Exists(folderPath))
+                if ((caseFolder is null && Directory.Exists(folderPath)) ||
+                    (processedMarkerPath is not null && File.Exists(processedMarkerPath)))
                     continue;
 
                 var message = await inbox.GetMessageAsync(summary.UniqueId, ct);
-                var count = await SaveAttachmentsAsync(message, folderPath, ct);
+                var count = await SaveAttachmentsAsync(
+                    message,
+                    folderPath,
+                    ct,
+                    caseFolder is null ? null : folderName,
+                    processedMarkerPath);
                 if (count > 0)
                 {
                     saved++;
@@ -218,10 +225,17 @@ public sealed class InboxMonitor(
         return true;
     }
 
-    private static async Task<int> SaveAttachmentsAsync(MimeMessage message, string folderPath, CancellationToken ct)
+    private static async Task<int> SaveAttachmentsAsync(
+        MimeMessage message,
+        string folderPath,
+        CancellationToken ct,
+        string? attachmentNamePrefix = null,
+        string? processedMarkerPath = null)
     {
         // Write to a temp folder first so a partial failure doesn't mark the email as processed.
-        var tempPath = folderPath + ".partial";
+        var tempPath = attachmentNamePrefix is null
+            ? folderPath + ".partial"
+            : Path.Combine(folderPath, ".inboxreader", $"{attachmentNamePrefix}.partial");
         if (Directory.Exists(tempPath))
             Directory.Delete(tempPath, true);
         Directory.CreateDirectory(tempPath);
@@ -254,7 +268,34 @@ public sealed class InboxMonitor(
             return 0;
         }
 
-        Directory.Move(tempPath, folderPath);
+        if (attachmentNamePrefix is null)
+        {
+            Directory.Move(tempPath, folderPath);
+        }
+        else
+        {
+            if (processedMarkerPath is null)
+                throw new InvalidOperationException("A processed marker path is required for case attachments.");
+
+            Directory.CreateDirectory(folderPath);
+            foreach (var existingPath in Directory.EnumerateFiles(folderPath)
+                         .Where(path => Path.GetFileName(path).StartsWith(
+                             attachmentNamePrefix + "_",
+                             StringComparison.OrdinalIgnoreCase)))
+            {
+                File.Delete(existingPath);
+            }
+
+            foreach (var tempFilePath in Directory.EnumerateFiles(tempPath))
+            {
+                var fileName = Sanitize($"{attachmentNamePrefix}_{Path.GetFileName(tempFilePath)}", 180);
+                File.Move(tempFilePath, GetUniquePath(folderPath, fileName));
+            }
+
+            Directory.Delete(tempPath, true);
+            await File.WriteAllTextAsync(processedMarkerPath, DateTime.UtcNow.ToString("O"), ct);
+        }
+
         return count;
     }
 

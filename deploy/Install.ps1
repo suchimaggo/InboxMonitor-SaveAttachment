@@ -11,7 +11,7 @@ if ($destinationPath -eq [IO.Path]::GetPathRoot($destinationPath)) {
 }
 
 New-Item -ItemType Directory -Path $destinationPath -Force | Out-Null
-& robocopy $sourcePath $destinationPath /E /R:2 /W:1 /XF appsettings.json checklist-templates.json
+& robocopy $sourcePath $destinationPath /E /R:2 /W:1 /XF appsettings.json
 if ($LASTEXITCODE -ge 8) {
     throw "Copying application files failed (robocopy exit code $LASTEXITCODE)."
 }
@@ -28,19 +28,6 @@ foreach ($relativeSettings in @(
             throw "The package is missing '$relativeSettings'."
         }
         Copy-Item -LiteralPath $sourceSettingsPath -Destination $settingsPath
-    }
-}
-
-foreach ($relativeTemplate in @(
-    'CompletenessChecker\checklist-templates.json'
-)) {
-    $templatePath = Join-Path $destinationPath $relativeTemplate
-    if (-not (Test-Path -LiteralPath $templatePath)) {
-        $sourceTemplatePath = Join-Path $sourcePath $relativeTemplate
-        if (-not (Test-Path -LiteralPath $sourceTemplatePath)) {
-            throw "The package is missing '$relativeTemplate'."
-        }
-        Copy-Item -LiteralPath $sourceTemplatePath -Destination $templatePath
     }
 }
 

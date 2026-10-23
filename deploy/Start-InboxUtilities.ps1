@@ -90,24 +90,44 @@ $clientCasesPath = Join-Path $dataRoot 'Clients'
 $inboxAttachmentsPath = Join-Path $dataRoot 'InboxAttachments'
 $newCaseDataPath = Join-Path $dataRoot 'NewCase'
 $checkerDataPath = Join-Path $dataRoot 'CompletenessChecker'
+$templatesPath = Join-Path $dataRoot 'Templates-DoNotDelete'
 foreach ($path in @(
     $casesPath,
     $clientCasesPath,
     $inboxAttachmentsPath,
     $newCaseDataPath,
+    $templatesPath,
     (Join-Path $checkerDataPath 'ApplicationStates')
 )) {
     New-Item -ItemType Directory -Path $path -Force | Out-Null
 }
 
-$loanTypeCatalog = Join-Path $dataRoot 'loan-types.json'
-if (-not (Test-Path -LiteralPath $loanTypeCatalog)) {
-    $packagedCatalog = Join-Path $root 'loan-types.json'
-    if (-not (Test-Path -LiteralPath $packagedCatalog)) {
-        throw "The shared loan type catalogue is missing: $packagedCatalog"
+$templateFiles = @(
+    'loan-types.json',
+    'checklist-templates.json',
+    'checklist-templates.defaults.json',
+    'checklist-templates.backup.json'
+)
+foreach ($fileName in $templateFiles) {
+    $sharedFile = Join-Path $templatesPath $fileName
+    $legacyFile = Join-Path $dataRoot $fileName
+    if (-not (Test-Path -LiteralPath $sharedFile) -and (Test-Path -LiteralPath $legacyFile)) {
+        Move-Item -LiteralPath $legacyFile -Destination $sharedFile
     }
-    Copy-Item -LiteralPath $packagedCatalog -Destination $loanTypeCatalog
+
+    if (-not (Test-Path -LiteralPath $sharedFile) -and $fileName -ne 'checklist-templates.backup.json') {
+        $packagedCandidates = @(
+            (Join-Path $root "Templates-DoNotDelete\$fileName"),
+            (Join-Path $root "CompletenessChecker\$fileName")
+        )
+        $packagedFile = $packagedCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if (-not $packagedFile) {
+            throw "The required shared template file is missing: $fileName"
+        }
+        Copy-Item -LiteralPath $packagedFile -Destination $sharedFile
+    }
 }
+$loanTypeCatalog = Join-Path $templatesPath 'loan-types.json'
 try {
     $catalog = Get-Content -LiteralPath $loanTypeCatalog -Raw | ConvertFrom-Json
     if ($catalog.loanTypes.Count -lt 1) {
