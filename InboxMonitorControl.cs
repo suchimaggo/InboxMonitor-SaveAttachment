@@ -9,7 +9,7 @@ public interface IInboxMonitorControl
 
 public sealed class InboxMonitorControl(
     MailSettings settings,
-    IHttpClientFactory httpClientFactory) : IInboxMonitorControl, IAsyncDisposable
+    MicrosoftGraphInboxClient graph) : IInboxMonitorControl, IAsyncDisposable, IHostedService
 {
     private const int MaxActivityEntries = 200;
     private readonly object _gate = new();
@@ -24,11 +24,11 @@ public sealed class InboxMonitorControl(
         {
             return new MonitorStatusResponse(
                 _isRunning,
-                settings.SelectedProvider.ToString(),
-                settings.Email,
+                "Microsoft Graph",
+                settings.Mailbox,
                 "Client Name-CASE-ID",
                 settings.ScanFromDate.Date,
-                settings.OutputFolder,
+                "SharePoint document library",
                 settings.PollIntervalSeconds,
                 _activity.ToArray());
         }
@@ -69,11 +69,20 @@ public sealed class InboxMonitorControl(
 
     public async ValueTask DisposeAsync() => await StopAsync(CancellationToken.None);
 
+    Task IHostedService.StartAsync(CancellationToken cancellationToken)
+    {
+        Start();
+        return Task.CompletedTask;
+    }
+
+    async Task IHostedService.StopAsync(CancellationToken cancellationToken) =>
+        await StopAsync(cancellationToken);
+
     private async Task RunMonitorAsync(CancellationToken cancellationToken)
     {
         try
         {
-            await new InboxMonitor(settings, AddActivity, RefreshCaseTrackingAsync).RunAsync(cancellationToken);
+            await new InboxMonitor(settings, graph, AddActivity).RunAsync(cancellationToken);
         }
         catch (Exception exception)
         {
@@ -90,17 +99,6 @@ public sealed class InboxMonitorControl(
                 AddActivityLocked("Monitor stopped.");
             }
         }
-    }
-
-    private async Task RefreshCaseTrackingAsync(CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(settings.TrackingRefreshUrl))
-            return;
-
-        var client = httpClientFactory.CreateClient("case-tracking");
-        using var response = await client.PostAsync(settings.TrackingRefreshUrl, content: null, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"Dashboard returned HTTP {(int)response.StatusCode}.");
     }
 
     private void AddActivity(string message)

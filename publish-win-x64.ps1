@@ -51,7 +51,7 @@ foreach ($templateFile in @(
         (Join-Path $templatesPublishPath $templateFile) -Force
 }
 
-foreach ($file in @('Install.ps1', 'Start-InboxUtilities.ps1', 'Stop-InboxUtilities.ps1', 'README-Install.md')) {
+foreach ($file in @('Install.ps1', 'Start-InboxUtilities.ps1', 'Stop-InboxUtilities.ps1', 'Set-ZohoEnvironment.ps1', 'README-Install.md')) {
     Copy-Item (Join-Path $repositoryRoot "deploy\$file") (Join-Path $publishRoot $file) -Force
 }
 

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>OM Document Intelligence Test</title>
+</head>
+<body>
+    <h2>OM Document Intelligence Test</h2>
+
+    <p>Select one authorised/redacted driver licence or passport.</p>
+
+    <input id="file" type="file"
+           accept=".pdf,.jpg,.jpeg,.png">
+
+    <button id="testButton">Run test</button>
+
+    <pre id="result"></pre>
+
+    <script>
+        const button = document.getElementById("testButton");
+        const fileInput = document.getElementById("file");
+        const result = document.getElementById("result");
+
+        button.addEventListener("click", async () => {
+            const file = fileInput.files[0];
+
+            if (!file) {
+                result.textContent = "Please select a file.";
+                return;
+            }
+
+            if (file.size > 4 * 1024 * 1024) {
+                result.textContent =
+                    "File is over the 4 MB pilot limit.";
+                return;
+            }
+
+            const data = new FormData();
+            data.append("file", file);
+
+            result.textContent = "Analyzing...";
+
+            try {
+                const response = await fetch(
+                    "/api/document-intelligence/test",
+                    {
+                        method: "POST",
+                        body: data
+                    });
+
+                const text = await response.text();
+
+                result.textContent =
+                    "HTTP " + response.status + "\n\n" + text;
+            }
+            catch (error) {
+                result.textContent =
+                    "Request failed: " + error;
+            }
+        });
+    </script>
+</body>
+</html>

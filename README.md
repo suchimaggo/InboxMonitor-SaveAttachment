@@ -1,72 +1,78 @@
 # Inbox Utilities
 
-This solution contains the Dashboard and the utilities the team will use first:
+The utilities are designed to run as three separate Azure App Services. Staff sign in with Microsoft Entra ID; the services use their App Service Managed Identities for Microsoft Graph. SharePoint is the source of truth for cases and documents. The hosted workflow does not use a staff desktop or the `Z:` drive.
 
-- **Utility Dashboard** — the launchpad at <http://127.0.0.1:5086>
-- **Inbox Reader** — the inbox attachment utility at <http://127.0.0.1:5087>
-- **New Loan Case** — create a case and prepare a Zoho email draft at <http://127.0.0.1:5088>
-- **Loan Processing** — the document utility at <http://127.0.0.1:5086/loan/>, launched from the dashboard
-- **Loan Application Completeness Checker** — text/OCR-assisted document checklist candidate scanning at <http://127.0.0.1:5089>
+| App Service | Responsibilities |
+|---|---|
+| Dashboard | Utility links; reads SharePoint cases, scans `Received` files, and previews/applies reversible document organization within SharePoint. |
+| New Case | Creates case folders and `Case Register` records in SharePoint; creates Outlook drafts without sending them. |
+| Inbox Reader | Polls the configured Exchange Online mailbox through Microsoft Graph and routes attachments into SharePoint. |
 
-## Run the web apps
+The Dashboard also hosts the completeness-checking library in-process. Its scan files are downloaded into a unique temporary directory and removed after each scan.
 
-Start the dashboard and Inbox Reader in separate terminals from the repository root:
+## Azure setup
+
+For each App Service:
+
+1. Enable Microsoft Entra authentication (App Service Authentication/Easy Auth), require authentication, and use the organization's single-tenant app registration.
+2. Enable a system-assigned Managed Identity (or configure `Azure__ManagedIdentityClientId` for a user-assigned identity).
+3. Configure the Graph application permissions and SharePoint site grants described below. Do not put client secrets or mailbox passwords in app settings.
+4. Configure the service settings as App Service application settings, using double underscores for nested keys.
+5. Use the `/health` endpoint for App Service health checks. Keep the Inbox Reader service running continuously with Always On enabled.
+
+The app's production middleware checks for the Easy Auth `X-MS-CLIENT-PRINCIPAL` header; this is an additional guard, not a replacement for enabling Easy Auth and requiring sign-in in Azure.
+
+### SharePoint
+
+Create a `Case Register` list with the internal column names `CaseID`, `ClientName`, `ClientEmail`, `CaseStatus`, `FolderName`, `FolderID`, and `CreatedUTC`. `CaseID` must be required, indexed, and unique. Configure an existing document-library parent folder for cases.
+
+Set these settings for all three services:
+
+```text
+SharePoint__SiteId
+SharePoint__ListId
+SharePoint__DriveId
+SharePoint__ParentFolderPath
+```
+
+The New Case service also accepts `SharePoint__TemplatesFilePath`. The Inbox Reader accepts `SharePoint__UnmatchedFolderPath`.
+
+Grant each Managed Identity only the required site access. New Case needs SharePoint write access. Dashboard needs read access to the register and write access to case folders for document organization and run journals. Inbox Reader needs read access to the list and write access to case folders and the unmatched-attachments folder. `Sites.Selected` with explicit site grants is preferred.
+
+### Mailbox access
+
+Set `GraphMail__Mailbox` for New Case, and `InboxReader__Mailbox`, `InboxReader__ScanFromDate`, and `InboxReader__PollIntervalSeconds` for Inbox Reader. Grant New Case the Graph permission needed to create drafts (`Mail.ReadWrite`); grant Inbox Reader the permission needed to read messages and attachments. Restrict application mailbox access to the designated mailbox using Exchange Online Application RBAC or the organization's approved equivalent.
+
+## Dashboard settings
+
+Set the hosted URLs in `UtilityDashboard/appsettings.json` or override them with deployment configuration:
+
+```text
+Utilities__0__Url
+Utilities__0__HealthUrl
+Utilities__1__Url
+Utilities__1__HealthUrl
+```
+
+Set the Dashboard's SharePoint settings and Managed Identity configuration in the same way as the other services. The Dashboard scans PDFs, images, and text files. For image OCR, deploy it on a platform with the required Tesseract runtime and English data; a Windows App Service is recommended unless those dependencies are packaged for Linux.
+
+## Local development
+
+Use the .NET 10 SDK for Inbox Reader. Local development uses `DefaultAzureCredential`; sign in with a developer identity that has equivalent Graph site and mailbox access. Configure SharePoint IDs and paths with .NET user-secrets or environment variables. Never commit production IDs, credentials, or client data.
 
 ```powershell
-dotnet run --project UtilityDashboard\UtilityDashboard.csproj
+dotnet build InboxReader.csproj
+dotnet build "C:\Utilities\SSB-Dashboard-with-3Tiles-Working-\New Case Create\New Case Create.csproj"
 ```
 
-```powershell
-dotnet run --project InboxReader.csproj
-```
+Build the Dashboard from the companion SSB Dashboard repository; the `UtilityDashboard` directory in this repository is a legacy desktop-package copy.
 
-Start New Loan Case in another terminal:
+## Deployment status and migration notes
 
-```powershell
-dotnet run --project "C:\Utilities\New Case Create\New Case Create.csproj"
-```
+Source code changes do not provision Azure resources, configure Easy Auth, grant Graph access, or migrate historical records. Supply the actual SharePoint IDs, hosted service URLs, managed identities, and permission grants before deployment. Historical data is not automatically migrated; import only records and documents that must remain available, using an approved migration process.
 
-Open the dashboard URL in a browser. The apps bind to loopback only and run independently. The dashboard links to Inbox Reader and New Loan Case; the desktop start/stop scripts manage those apps and the Dashboard.
+Loan Processing is hosted within the Dashboard and operates only on SharePoint case files. Staff select a Case ID, review a temporary processing preview, and explicitly confirm moves. The Dashboard stores undo journals in SharePoint and verifies each file's hash and original-path availability before restoring it.
 
-The dashboard starts Loan Processing as a background console process when you submit a folder. It uses the project configured by `LoanProcessing:ProjectPath` in `UtilityDashboard/appsettings.json`; the default is the sibling `LoanProcessing-Utility` folder under `C:\Utilities`. Loan Processing may move and rename files, so the page requires confirmation before processing. OCR prerequisites are listed in [LoanProcessing-Utility/README.md](../LoanProcessing-Utility/README.md).
+A mailbox password was previously present in the workspace configuration and has since been removed. Rotate it if it was valid; removing it from source does not revoke the credential.
 
-New Loan Case saves each case's requested documents in `Z:\LoanProcessing-AutoMation\Clients\<CLIENT-NAME>\<CASE-ID>\case.json` and generates the Zoho draft subject as `Client Name-CASE-ID`. For example, Shyam Maggo's cases have separate folders such as `Clients\SHYAM-MAGGO\REFI-3Q8N5W` and `Clients\SHYAM-MAGGO\PUR-7K4M2P`. Inbox Reader searches only messages delivered on or after 15 October 2026 (inclusive), checks inbox subjects for exactly one saved client-and-case reference, and stores matching attachments directly in the case folder. Each matched attachment filename is prefixed with the message timestamp, subject, and mailbox UID to keep files from different emails distinct. Processing state is kept in the case folder's `.inboxreader` subfolder. Unmatched attachments are saved under `Z:\LoanProcessing-AutoMation\InboxAttachments`. The Dashboard refreshes checklist candidates after Inbox Reader polls, using the Completeness Checker for text extraction and OCR. Matches remain suggestions for staff review; only PDFs, JPEG/PNG images, and text files are inspected, and no client reminders are sent.
-
-Inbox Reader supports Zoho and Microsoft 365/Exchange Online IMAP. Set `InboxReader:MailExchangeServer` to `Zoho` or `Outlook` in `appsettings.json`; it takes precedence over the legacy `InboxReader:Provider` setting. Zoho uses an app-specific password and optional `ImapHost` override. Outlook uses OAuth device-code sign-in, requires an Azure app registration with delegated IMAP permission, and connects to `outlook.office365.com`.
-
-The shared loan type catalogue and checklist JSON files are stored at `Z:\LoanProcessing-AutoMation\Templates-DoNotDelete`. New Loan Case and the Completeness Checker depend on these files; do not delete or move the folder.
-
-## Publish for a new Windows x64 laptop
-
-From the repository root, run:
-
-```powershell
-.\publish-win-x64.ps1
-```
-
-This creates `artifacts\InboxUtilities-win-x64.zip`, a self-contained package with the Dashboard, Inbox Reader, New Loan Case, Loan Processing, and Completeness Checker. It excludes the development mailbox settings and replaces them with a blank-password template. Copy and extract the ZIP on the new laptop, then follow [deploy/README-Install.md](./deploy/README-Install.md). ImageMagick is optional for scanned-PDF OCR fallback.
-
-## Publish for an Apple silicon Mac
-
-From the repository root, run:
-
-```powershell
-.\publish-macos-arm64.ps1
-```
-
-This creates `artifacts\InboxUtilities-macOS-arm64.zip`, a separate self-contained package for Apple silicon (`osx-arm64`) with the Dashboard, Inbox Reader, New Loan Case, and Loan Processing. Extract it on the Mac and follow [deploy/macOS/README-Install.md](./deploy/macOS/README-Install.md). The Mac needs the Tesseract command-line application installed for OCR; ImageMagick is optional for scanned-PDF OCR fallback. The macOS package is cross-published on Windows and still needs runtime verification on an Apple silicon Mac.
-
-## Add a utility
-
-Add another entry to the `Utilities` array in [UtilityDashboard/appsettings.json](./UtilityDashboard/appsettings.json):
-
-```json
-{
-  "Name": "My Utility",
-  "Description": "A short description of the utility.",
-  "Url": "http://127.0.0.1:5090/",
-  "HealthUrl": "http://127.0.0.1:5090/health"
-}
-```
-
-`HealthUrl` is optional. When omitted, the dashboard shows that the utility's status has not been configured.
+The Windows and macOS installer guides and packaging scripts describe the retired desktop deployment model. Do not use them to deploy the hosted services.

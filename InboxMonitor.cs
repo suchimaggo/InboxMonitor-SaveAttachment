@@ -1,70 +1,52 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using MailKit;
-using MailKit.Net.Imap;
-using MailKit.Search;
-using MailKit.Security;
-using MimeKit;
+using System.Net.Http.Json;
+using Azure.Core;
 
 namespace InboxReader;
 
 public sealed class InboxMonitor(
     MailSettings settings,
-    Action<string>? log = null,
-    Func<CancellationToken, Task>? pollCompleted = null)
+    MicrosoftGraphInboxClient graph,
+    Action<string>? log = null)
 {
-    private static readonly Regex CaseIdPattern = new(
-        @"\b(?:FHB|REFI|PUR|INV|CONST|OTHER)-[23456789A-HJ-NP-Z]{6}\b",
+    internal static readonly Regex CaseIdPattern = new(
+        @"\b[A-Z0-9]{2,10}-[23456789A-HJ-NP-Z]{6}\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
-    private static readonly JsonDocumentOptions CaseJsonOptions = new() { MaxDepth = 16 };
-    private readonly OutlookTokenProvider? _tokenProvider =
-        settings.SelectedProvider == MailProvider.Outlook ? new OutlookTokenProvider(settings, log) : null;
     private readonly Action<string> _log = log ?? Console.WriteLine;
 
-    public async Task RunAsync(CancellationToken ct)
+    public async Task RunAsync(CancellationToken cancellationToken)
     {
         ValidateSettings();
+        _log($"Monitoring Microsoft Graph mailbox {settings.Mailbox} for messages delivered on or after {settings.ScanFromDate:yyyy-MM-dd}.");
+        _log("Case and unmatched attachments are stored in the configured SharePoint document library.");
 
-        Directory.CreateDirectory(settings.OutputFolder);
-        if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
-            Directory.CreateDirectory(ResolveCaseRootFolder());
-        _log($"Monitoring {settings.SelectedProvider} inbox for messages delivered on or after {settings.ScanFromDate:yyyy-MM-dd}, matching case subjects in the format Client Name-CASE-ID.");
-        _log($"Unmatched email attachments will be saved to: {settings.OutputFolder}");
-        if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
-            _log($"Case attachment tracking is enabled: {ResolveCaseRootFolder()}");
-
-        while (!ct.IsCancellationRequested)
+        while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                await CheckInboxAsync(ct);
-                if (pollCompleted is not null)
-                {
-                    try
-                    {
-                        await pollCompleted(ct);
-                    }
-                    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
-                    {
-                        _log($"[{DateTime.Now:T}] Case tracking refresh failed: {exception.Message}");
-                    }
-                }
+                var saved = await graph.ProcessInboxAsync(settings, _log, cancellationToken);
+                _log($"[{DateTime.Now:T}] Check complete. {saved} new attachment(s) saved.");
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
             }
-            catch (Exception ex)
+            catch (Exception exception) when (
+                exception is HttpRequestException or InvalidOperationException or JsonException or TaskCanceledException)
             {
-                _log($"[{DateTime.Now:T}] Error: {ex.Message}");
+                _log($"[{DateTime.Now:T}] Microsoft Graph polling failed: {exception.Message}");
             }
 
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(settings.PollIntervalSeconds), ct);
+                await Task.Delay(TimeSpan.FromSeconds(settings.PollIntervalSeconds), cancellationToken);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
             }
@@ -73,253 +55,403 @@ public sealed class InboxMonitor(
 
     private void ValidateSettings()
     {
+        if (string.IsNullOrWhiteSpace(settings.Mailbox))
+            throw new InvalidOperationException("InboxReader:Mailbox must be configured.");
+        if (!System.Net.Mail.MailAddress.TryCreate(settings.Mailbox, out _))
+            throw new InvalidOperationException("InboxReader:Mailbox must be a valid mailbox address.");
         if (settings.ScanFromDate == default)
-            throw new InvalidOperationException("ScanFromDate must be configured in the InboxReader settings.");
+            throw new InvalidOperationException("InboxReader:ScanFromDate must be configured.");
+        if (settings.PollIntervalSeconds is < 30 or > 3600)
+            throw new InvalidOperationException("InboxReader:PollIntervalSeconds must be between 30 and 3600.");
+    }
+}
 
-        if (string.IsNullOrWhiteSpace(settings.Email))
-            throw new InvalidOperationException("Email is required.");
+public sealed class MicrosoftGraphInboxClient(
+    HttpClient httpClient,
+    IConfiguration configuration,
+    TokenCredential credential)
+{
+    private const string GraphBaseUrl = "https://graph.microsoft.com/v1.0";
+    private const long MaximumAttachmentBytes = 100L * 1024 * 1024;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-        if (settings.SelectedProvider == MailProvider.Outlook && string.IsNullOrWhiteSpace(settings.OutlookClientId))
-            throw new InvalidOperationException("OutlookClientId must be configured for the Outlook provider.");
+    public async Task<int> ProcessInboxAsync(
+        MailSettings settings,
+        Action<string> log,
+        CancellationToken cancellationToken)
+    {
+        var accessToken = await GetAccessTokenAsync(cancellationToken);
+        var mailbox = Uri.EscapeDataString(settings.Mailbox);
+        var date = Uri.EscapeDataString(settings.ScanFromDate.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"));
+        var query =
+            $"{GraphBaseUrl}/users/{mailbox}/mailFolders/inbox/messages" +
+            $"?$select=id,subject,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {date} and hasAttachments eq true&$top=100";
+        Uri? nextUri = new(query);
+        var saved = 0;
+        var cases = new Dictionary<string, CaseFolder?>(StringComparer.OrdinalIgnoreCase);
 
-        if (settings.SelectedProvider == MailProvider.Zoho && string.IsNullOrWhiteSpace(settings.Password))
-            throw new InvalidOperationException("Password must be configured for the Zoho provider.");
+        while (nextUri is not null)
+        {
+            using var page = await SendGraphAsync(HttpMethod.Get, nextUri, accessToken, cancellationToken);
+            if (!page.RootElement.TryGetProperty("value", out var messages) ||
+                messages.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("Microsoft Graph did not return the mailbox message list.");
 
-        if (settings.SelectedProvider is not (MailProvider.Zoho or MailProvider.Outlook))
-            throw new InvalidOperationException($"Unsupported mail exchange: {settings.SelectedProvider}.");
+            foreach (var message in messages.EnumerateArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var subject = GetString(message, "subject") ?? "";
+                var messageId = GetRequiredString(message, "id");
+                var receivedAt = message.TryGetProperty("receivedDateTime", out var receivedDate) &&
+                                 receivedDate.TryGetDateTimeOffset(out var parsedDate)
+                    ? parsedDate
+                    : DateTimeOffset.UtcNow;
+                var destination = await ResolveDestinationAsync(
+                    subject,
+                    receivedAt,
+                    cases,
+                    accessToken,
+                    cancellationToken);
+                var attachmentCount = await SaveMessageAttachmentsAsync(
+                    mailbox,
+                    messageId,
+                    receivedAt,
+                    destination,
+                    accessToken,
+                    log,
+                    cancellationToken);
+                saved += attachmentCount;
+                if (attachmentCount > 0)
+                    log($"[{DateTime.Now:T}] Saved {attachmentCount} attachment(s) from \"{subject}\" to SharePoint.");
+            }
 
-        if (string.IsNullOrWhiteSpace(settings.ResolveHost()))
-            throw new InvalidOperationException("IMAP host is not configured.");
+            nextUri = page.RootElement.TryGetProperty("@odata.nextLink", out var nextLink) &&
+                      Uri.TryCreate(nextLink.GetString(), UriKind.Absolute, out var parsedNextLink) &&
+                      string.Equals(parsedNextLink.Host, "graph.microsoft.com", StringComparison.OrdinalIgnoreCase)
+                ? parsedNextLink
+                : null;
+        }
+
+        return saved;
     }
 
-    private async Task CheckInboxAsync(CancellationToken ct)
+    private async Task<AttachmentDestination> ResolveDestinationAsync(
+        string subject,
+        DateTimeOffset receivedAt,
+        IDictionary<string, CaseFolder?> cases,
+        string accessToken,
+        CancellationToken cancellationToken)
     {
-        using var client = new ImapClient();
-        await client.ConnectAsync(settings.ResolveHost(), settings.ImapPort, SecureSocketOptions.SslOnConnect, ct);
-
-        if (_tokenProvider is not null)
+        var matches = InboxMonitor.CaseIdPattern.Matches(subject);
+        if (matches.Count == 1)
         {
-            var token = await _tokenProvider.GetAccessTokenAsync(ct);
-            await client.AuthenticateAsync(new SaslMechanismOAuth2(settings.Email, token), ct);
-        }
-        else
-        {
-            if (string.IsNullOrEmpty(settings.Password))
-                throw new InvalidOperationException("Password must be configured for the Zoho provider.");
-            await client.AuthenticateAsync(settings.Email, settings.Password, ct);
-        }
-
-        var inbox = client.Inbox;
-        await inbox.OpenAsync(FolderAccess.ReadOnly, ct);
-
-        var uids = await inbox.SearchAsync(SearchQuery.DeliveredAfter(settings.ScanFromDate.Date), ct);
-        var saved = 0;
-
-        if (uids.Count > 0)
-        {
-            var summaries = await inbox.FetchAsync(uids,
-                MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.BodyStructure, ct);
-
-            foreach (var summary in summaries)
+            var caseId = matches[0].Value;
+            if (!cases.TryGetValue(caseId, out var caseFolder))
             {
-                var subject = summary.Envelope?.Subject ?? "";
-                if (!summary.Attachments.Any())
-                    continue;
+                caseFolder = await FindCaseAsync(caseId, accessToken, cancellationToken);
+                cases[caseId] = caseFolder;
+            }
 
-                var date = summary.Envelope?.Date?.LocalDateTime ?? DateTime.Now;
-                var folderName = $"{date:yyyyMMdd_HHmmss}_{Sanitize(subject, 60)}_{summary.UniqueId.Id}";
-                string? caseFolder = null;
-                string? expectedCaseSubject = null;
-                if (!string.IsNullOrWhiteSpace(settings.CaseRootFolder))
+            if (caseFolder is not null)
+            {
+                var expectedReference = $"{caseFolder.ClientName}-{caseId}";
+                if (subject.Contains(expectedReference, StringComparison.OrdinalIgnoreCase))
                 {
-                    var caseIdMatches = CaseIdPattern.Matches(subject);
-                    if (caseIdMatches.Count == 1 &&
-                        TryResolveCaseFolder(caseIdMatches[0].Value, out caseFolder, out expectedCaseSubject))
-                    {
-                        if (!subject.Contains(expectedCaseSubject!, StringComparison.OrdinalIgnoreCase))
-                        {
-                            _log($"[{DateTime.Now:T}] Subject \"{subject}\" contains case ID {caseIdMatches[0].Value} but not the matching client-case reference \"{expectedCaseSubject}\"; saving attachments to the unmatched inbox folder.");
-                            caseFolder = null;
-                        }
-                    }
-                    else if (caseIdMatches.Count > 0)
-                    {
-                        _log($"[{DateTime.Now:T}] Subject \"{subject}\" contains an ambiguous or unknown case ID; saving attachments to the unmatched inbox folder.");
-                    }
-                }
-
-                var folderPath = caseFolder ?? Path.Combine(settings.OutputFolder, folderName);
-                var processedMarkerPath = caseFolder is null
-                    ? null
-                    : Path.Combine(caseFolder, ".inboxreader", $"{summary.UniqueId.Id}.processed");
-
-                if ((caseFolder is null && Directory.Exists(folderPath)) ||
-                    (processedMarkerPath is not null && File.Exists(processedMarkerPath)))
-                    continue;
-
-                var message = await inbox.GetMessageAsync(summary.UniqueId, ct);
-                var count = await SaveAttachmentsAsync(
-                    message,
-                    folderPath,
-                    ct,
-                    caseFolder is null ? null : folderName,
-                    processedMarkerPath);
-                if (count > 0)
-                {
-                    saved++;
-                    _log($"[{DateTime.Now:T}] Saved {count} attachment(s) from \"{subject}\" -> {folderPath}");
+                    var receivedPath = $"{GetParentPath()}/{caseFolder.FolderName}/Received";
+                    await EnsureFolderPathAsync(receivedPath, accessToken, cancellationToken);
+                    return new AttachmentDestination(receivedPath);
                 }
             }
         }
 
-        _log($"[{DateTime.Now:T}] Check complete. {saved} new email(s) processed.");
-        await client.DisconnectAsync(true, ct);
+        var unmatchedPath = configuration["SharePoint:UnmatchedFolderPath"] ?? "InboxAttachments";
+        await EnsureFolderPathAsync(unmatchedPath, accessToken, cancellationToken);
+        return new AttachmentDestination(unmatchedPath);
     }
 
-    private string ResolveCaseRootFolder() =>
-        Path.GetFullPath(settings.CaseRootFolder!, AppContext.BaseDirectory);
-
-    private bool TryResolveCaseFolder(string caseId, out string? caseFolder, out string? expectedCaseSubject)
+    private async Task<int> SaveMessageAttachmentsAsync(
+        string mailbox,
+        string messageId,
+        DateTimeOffset receivedAt,
+        AttachmentDestination destination,
+        string accessToken,
+        Action<string> log,
+        CancellationToken cancellationToken)
     {
-        caseFolder = null;
-        expectedCaseSubject = null;
-        var root = ResolveCaseRootFolder();
-        if (!Directory.Exists(root))
-            return false;
+        var uri = new Uri(
+            $"{GraphBaseUrl}/users/{mailbox}/messages/{Uri.EscapeDataString(messageId)}/attachments" +
+            "?$select=id,name,size,isInline&$top=100");
+        using var response = await SendGraphAsync(HttpMethod.Get, uri, accessToken, cancellationToken);
+        if (!response.RootElement.TryGetProperty("value", out var attachments) ||
+            attachments.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("Microsoft Graph did not return the message attachments.");
 
-        var matchingRecords = Directory.EnumerateFiles(root, "case.json", SearchOption.AllDirectories)
-            .Where(path => string.Equals(
-                Path.GetFileName(Path.GetDirectoryName(path)),
-                caseId,
-                StringComparison.OrdinalIgnoreCase))
-            .Take(2)
-            .ToArray();
-        if (matchingRecords.Length != 1)
-            return false;
+        var messageKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(messageId)))[..12];
+        var saved = 0;
+        foreach (var attachment in attachments.EnumerateArray())
+        {
+            if (!GetString(attachment, "@odata.type")?.EndsWith(
+                    "fileAttachment", StringComparison.OrdinalIgnoreCase) ?? true)
+                continue;
+            if (attachment.TryGetProperty("isInline", out var isInline) && isInline.ValueKind == JsonValueKind.True)
+                continue;
 
-        var recordPath = matchingRecords[0];
-        var candidate = Path.GetDirectoryName(recordPath);
-        if (candidate is null || !File.Exists(recordPath))
-            return false;
+            var name = Sanitize(GetString(attachment, "name") ?? "attachment", 140);
+            var attachmentId = GetRequiredString(attachment, "id");
+            if (!attachment.TryGetProperty("size", out var sizeElement) ||
+                !sizeElement.TryGetInt64(out var size) ||
+                size is < 0 or > MaximumAttachmentBytes)
+            {
+                log($"[{DateTime.Now:T}] Skipped attachment '{name}' because it is larger than 100 MB or its size was not reported.");
+                continue;
+            }
 
+           var attachmentKey = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(attachmentId)))[..12];
+
+            var fileName = Sanitize(
+                 $"{receivedAt.UtcDateTime:yyyyMMdd_HHmmss}_{messageKey}_{attachmentKey}_{name}",
+                180);
+            var filePath = $"{destination.FolderPath}/{fileName}";
+            if (await DriveItemExistsAsync(filePath, accessToken, cancellationToken))
+                continue;
+
+            var contentUri = new Uri(
+                $"{GraphBaseUrl}/users/{mailbox}/messages/{Uri.EscapeDataString(messageId)}" +
+                $"/attachments/{Uri.EscapeDataString(attachmentId)}/$value");
+            using var download = await SendGraphContentAsync(
+                HttpMethod.Get,
+                contentUri,
+                accessToken,
+                cancellationToken);
+            var bytes = await download.Content.ReadAsByteArrayAsync(cancellationToken);
+            if (bytes.LongLength > MaximumAttachmentBytes)
+            {
+                log($"[{DateTime.Now:T}] Skipped attachment '{name}' because it exceeds 100 MB.");
+                continue;
+            }
+
+            await UploadFileAsync(filePath, bytes, accessToken, cancellationToken);
+            saved++;
+        }
+
+        return saved;
+    }
+
+    private async Task<CaseFolder?> FindCaseAsync(
+        string caseId,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        var siteId = RequiredSetting("SharePoint:SiteId");
+        var listId = RequiredSetting("SharePoint:ListId");
+        var filter = Uri.EscapeDataString($"fields/CaseID eq '{caseId.Replace("'", "''", StringComparison.Ordinal)}'");
+        using var items = await SendGraphAsync(
+            HttpMethod.Get,
+            new Uri($"{GraphBaseUrl}/sites/{Uri.EscapeDataString(siteId)}/lists/{Uri.EscapeDataString(listId)}" +
+                    $"/items?$expand=fields&$filter={filter}"),
+            accessToken,
+            cancellationToken);
+        if (!items.RootElement.TryGetProperty("value", out var values) ||
+            values.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("Microsoft Graph did not return the Case Register item list.");
+
+        var matches = values.EnumerateArray().ToArray();
+        if (matches.Length > 1)
+            throw new InvalidOperationException($"Case Register contains duplicate CaseID values for {caseId}.");
+        if (matches.Length == 0)
+            return null;
+
+        var fields = matches[0].GetProperty("fields");
+        var name = GetRequiredString(fields, "ClientName");
+        var folder = GetRequiredString(fields, "FolderName");
+        return new CaseFolder(name, folder);
+    }
+
+    private async Task EnsureFolderPathAsync(
+        string path,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        var driveId = Uri.EscapeDataString(RequiredSetting("SharePoint:DriveId"));
+        using var root = await SendGraphAsync(
+            HttpMethod.Get,
+            new Uri($"{GraphBaseUrl}/drives/{driveId}/root"),
+            accessToken,
+            cancellationToken);
+        var parentId = GetRequiredString(root.RootElement, "id");
+        var currentPath = "";
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            currentPath = string.IsNullOrEmpty(currentPath) ? segment : $"{currentPath}/{segment}";
+            var existing = await TryGetDriveItemAsync(currentPath, accessToken, cancellationToken);
+            if (existing is not null)
+            {
+                parentId = GetRequiredString(existing.RootElement, "id");
+                continue;
+            }
+
+            using var created = await SendGraphAsync(
+                HttpMethod.Post,
+                new Uri($"{GraphBaseUrl}/drives/{driveId}/items/{Uri.EscapeDataString(parentId)}/children"),
+                accessToken,
+                cancellationToken,
+                new Dictionary<string, object?>
+                {
+                    ["name"] = segment,
+                    ["folder"] = new { },
+                    ["@microsoft.graph.conflictBehavior"] = "fail"
+                });
+            parentId = GetRequiredString(created.RootElement, "id");
+        }
+    }
+
+    private async Task<bool> DriveItemExistsAsync(
+        string path,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        using var item = await TryGetDriveItemAsync(path, accessToken, cancellationToken);
+        return item is not null;
+    }
+
+    private async Task<JsonDocument?> TryGetDriveItemAsync(
+        string path,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        var escapedPath = EscapePath(path);
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(recordPath), CaseJsonOptions);
-            if (!document.RootElement.TryGetProperty("caseId", out var storedId) ||
-                storedId.ValueKind != JsonValueKind.String ||
-                !string.Equals(storedId.GetString(), caseId, StringComparison.OrdinalIgnoreCase))
-                return false;
-            if (!document.RootElement.TryGetProperty("clientName", out var storedClientName) ||
-                storedClientName.ValueKind != JsonValueKind.String ||
-                string.IsNullOrWhiteSpace(storedClientName.GetString()))
-                return false;
-            expectedCaseSubject = $"{storedClientName.GetString()!.Trim()}-{caseId}";
+            return await SendGraphAsync(
+                HttpMethod.Get,
+                new Uri($"{GraphBaseUrl}/drives/{Uri.EscapeDataString(RequiredSetting("SharePoint:DriveId"))}/root:/{escapedPath}"),
+                accessToken,
+                cancellationToken);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        catch (GraphRequestException exception) when (exception.GraphStatusCode == HttpStatusCode.NotFound)
         {
-            _log($"[{DateTime.Now:T}] Could not validate case record for {caseId}: {exception.Message}");
-            return false;
+            return null;
         }
-
-        caseFolder = candidate;
-        return true;
     }
 
-    private static async Task<int> SaveAttachmentsAsync(
-        MimeMessage message,
-        string folderPath,
-        CancellationToken ct,
-        string? attachmentNamePrefix = null,
-        string? processedMarkerPath = null)
+    private async Task UploadFileAsync(
+        string path,
+        byte[] contents,
+        string accessToken,
+        CancellationToken cancellationToken)
     {
-        // Write to a temp folder first so a partial failure doesn't mark the email as processed.
-        var tempPath = attachmentNamePrefix is null
-            ? folderPath + ".partial"
-            : Path.Combine(folderPath, ".inboxreader", $"{attachmentNamePrefix}.partial");
-        if (Directory.Exists(tempPath))
-            Directory.Delete(tempPath, true);
-        Directory.CreateDirectory(tempPath);
-
-        var count = 0;
-        foreach (var attachment in message.Attachments)
-        {
-            var fileName = attachment switch
-            {
-                MimePart part => part.FileName,
-                MessagePart msgPart => (msgPart.Message?.Subject ?? "attached-message") + ".eml",
-                _ => null
-            };
-
-            var safeName = Sanitize(string.IsNullOrWhiteSpace(fileName) ? $"attachment_{count + 1}" : fileName, 150);
-            var filePath = GetUniquePath(tempPath, safeName);
-
-            await using var stream = File.Create(filePath);
-            if (attachment is MessagePart { Message: not null } rfc822)
-                await rfc822.Message.WriteToAsync(stream, ct);
-            else if (attachment is MimePart { Content: not null } part)
-                await part.Content.DecodeToAsync(stream, ct);
-
-            count++;
-        }
-
-        if (count == 0)
-        {
-            Directory.Delete(tempPath, true);
-            return 0;
-        }
-
-        if (attachmentNamePrefix is null)
-        {
-            Directory.Move(tempPath, folderPath);
-        }
-        else
-        {
-            if (processedMarkerPath is null)
-                throw new InvalidOperationException("A processed marker path is required for case attachments.");
-
-            Directory.CreateDirectory(folderPath);
-            foreach (var existingPath in Directory.EnumerateFiles(folderPath)
-                         .Where(path => Path.GetFileName(path).StartsWith(
-                             attachmentNamePrefix + "_",
-                             StringComparison.OrdinalIgnoreCase)))
-            {
-                File.Delete(existingPath);
-            }
-
-            foreach (var tempFilePath in Directory.EnumerateFiles(tempPath))
-            {
-                var fileName = Sanitize($"{attachmentNamePrefix}_{Path.GetFileName(tempFilePath)}", 180);
-                File.Move(tempFilePath, GetUniquePath(folderPath, fileName));
-            }
-
-            Directory.Delete(tempPath, true);
-            await File.WriteAllTextAsync(processedMarkerPath, DateTime.UtcNow.ToString("O"), ct);
-        }
-
-        return count;
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            new Uri($"{GraphBaseUrl}/drives/{Uri.EscapeDataString(RequiredSetting("SharePoint:DriveId"))}/root:/{EscapePath(path)}:/content"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Content = new ByteArrayContent(contents);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw await CreateGraphExceptionAsync(response, cancellationToken);
     }
 
-    private static string GetUniquePath(string folder, string fileName)
+    private async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
     {
-        var path = Path.Combine(folder, fileName);
-        var name = Path.GetFileNameWithoutExtension(fileName);
-        var ext = Path.GetExtension(fileName);
-        for (var i = 1; File.Exists(path); i++)
-            path = Path.Combine(folder, $"{name} ({i}){ext}");
-        return path;
+        var token = await credential.GetTokenAsync(
+            new TokenRequestContext(["https://graph.microsoft.com/.default"]),
+            cancellationToken);
+        return token.Token;
     }
 
-    // Replaces path separators and invalid characters to prevent path traversal from untrusted names.
+    private async Task<JsonDocument> SendGraphAsync(
+        HttpMethod method,
+        Uri uri,
+        string accessToken,
+        CancellationToken cancellationToken,
+        object? body = null)
+    {
+        using var request = new HttpRequestMessage(method, uri);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        if (body is not null)
+            request.Content = JsonContent.Create(body);
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw await CreateGraphExceptionAsync(response, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        return JsonDocument.Parse(content);
+    }
+
+    private async Task<HttpResponseMessage> SendGraphContentAsync(
+        HttpMethod method,
+        Uri uri,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(method, uri);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var response = await httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var exception = await CreateGraphExceptionAsync(response, cancellationToken);
+            response.Dispose();
+            throw exception;
+        }
+
+        return response;
+    }
+
+    private static async Task<GraphRequestException> CreateGraphExceptionAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        return new GraphRequestException(
+            response.StatusCode,
+            $"Microsoft Graph request failed ({(int)response.StatusCode}): {Limit(content)}");
+    }
+
+    private string GetParentPath()
+    {
+        var path = configuration["SharePoint:ParentFolderPath"]?.Trim().Trim('/');
+        return string.IsNullOrWhiteSpace(path) ? "" : path;
+    }
+
+    private string RequiredSetting(string key) =>
+        !string.IsNullOrWhiteSpace(configuration[key])
+            ? configuration[key]!
+            : throw new InvalidOperationException($"Configure '{key}' for the Microsoft Graph inbox integration.");
+
+    private static string EscapePath(string path) =>
+        string.Join("/", path.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString));
+
+    private static string? GetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static string GetRequiredString(JsonElement element, string propertyName) =>
+        GetString(element, propertyName) is { Length: > 0 } value
+            ? value
+            : throw new InvalidOperationException($"Microsoft Graph response did not contain '{propertyName}'.");
+
     private static string Sanitize(string value, int maxLength)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var sb = new StringBuilder(value.Length);
-        foreach (var c in value)
-            sb.Append(invalid.Contains(c) || c is '/' or '\\' ? '_' : c);
+        var invalid = "<>:\"/\\|?*".ToHashSet();
+        var safe = new string(value.Select(character =>
+            char.IsControl(character) || invalid.Contains(character) ? '_' : character).ToArray())
+            .Trim().TrimEnd('.', ' ');
+        if (safe.Length > maxLength)
+            safe = safe[..maxLength].TrimEnd('.', ' ');
+        return string.IsNullOrWhiteSpace(safe) ? "attachment" : safe;
+    }
 
-        var result = sb.ToString().Trim().TrimEnd('.');
-        if (result.Length > maxLength)
-            result = result[..maxLength].TrimEnd();
-        return string.IsNullOrEmpty(result) || result is "." or ".." ? "untitled" : result;
+    private static string Limit(string value)
+    {
+        var text = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return text.Length <= 500 ? text : text[..500];
+    }
+
+    private sealed record CaseFolder(string ClientName, string FolderName);
+    private sealed record AttachmentDestination(string FolderPath);
+    private sealed class GraphRequestException(HttpStatusCode statusCode, string message) : HttpRequestException(message)
+    {
+        public HttpStatusCode GraphStatusCode { get; } = statusCode;
     }
 }
