@@ -9,8 +9,7 @@ public sealed record IdentityDocumentResult(
     string? FirstName,
     double? FirstNameConfidence,
     string? LastName,
-    double? LastNameConfidence,
-    string ReviewStatus);
+    double? LastNameConfidence);
 
 public sealed class DocumentIntelligenceService
 {
@@ -66,8 +65,7 @@ public sealed class DocumentIntelligenceService
                 FirstName: null,
                 FirstNameConfidence: null,
                 LastName: null,
-                LastNameConfidence: null,
-                ReviewStatus: "Unclassified");
+                LastNameConfidence: null);
         }
 
         var firstName = GetStringField(
@@ -78,12 +76,6 @@ public sealed class DocumentIntelligenceService
             document,
             "LastName");
 
-        string reviewStatus = DetermineReviewStatus(
-            document.Confidence,
-            firstName.Confidence,
-            lastName.Confidence,
-            firstName.Value,
-            lastName.Value);
 
         return new IdentityDocumentResult(
             DocumentType: document.DocumentType,
@@ -91,8 +83,7 @@ public sealed class DocumentIntelligenceService
             FirstName: firstName.Value,
             FirstNameConfidence: firstName.Confidence,
             LastName: lastName.Value,
-            LastNameConfidence: lastName.Confidence,
-            ReviewStatus: reviewStatus);
+            LastNameConfidence: lastName.Confidence);
     }
 
     private static (string? Value, double? Confidence)
@@ -119,33 +110,5 @@ public sealed class DocumentIntelligenceService
                 ? null
                 : value.Trim(),
             field.Confidence);
-    }
-
-    private static string DetermineReviewStatus(
-        double documentConfidence,
-        double? firstNameConfidence,
-        double? lastNameConfidence,
-        string? firstName,
-        string? lastName)
-    {
-        if (string.IsNullOrWhiteSpace(firstName) ||
-            string.IsNullOrWhiteSpace(lastName))
-        {
-            return "Unclassified";
-        }
-
-        double lowestConfidence = new[]
-        {
-            documentConfidence,
-            firstNameConfidence ?? 0,
-            lastNameConfidence ?? 0
-        }.Min();
-
-        return lowestConfidence switch
-        {
-            >= 0.90 => "AutoNameCandidate",
-            >= 0.70 => "ManualReview",
-            _ => "Unclassified"
-        };
     }
 }
