@@ -61,10 +61,10 @@ public static class DocumentIntelligenceEndpoints
         using var memory = new MemoryStream();
         await stream.CopyToAsync(memory, cancellationToken);
 
-      IdentityDocumentResult result =
-        await service.AnalyzeIdentityDocumentAsync(
-            memory.ToArray(),
-            cancellationToken);
+        IdentityDocumentResult result =
+            await service.AnalyzeIdentityDocumentAsync(
+                memory.ToArray(),
+                cancellationToken);
 
         var expectedName = NormalizeName(expectedApplicantName);
         var extractedName = NormalizeName(
@@ -78,9 +78,9 @@ public static class DocumentIntelligenceEndpoints
                 StringComparison.OrdinalIgnoreCase);
 
         var supportedDocumentType =
-        result.DocumentType is
-        "idDocument.driverLicense" or
-        "idDocument.passport";
+            result.DocumentType is
+                "idDocument.driverLicense" or
+                "idDocument.passport";
 
         var autoNameCandidate =
             supportedDocumentType &&
@@ -91,6 +91,16 @@ public static class DocumentIntelligenceEndpoints
         var reviewStatus = autoNameCandidate
             ? "AutoNameCandidate"
             : "ManualReview";
+        string? suggestedFileName = null;
+
+        if (autoNameCandidate)
+        {
+            suggestedFileName = BuildFriendlyFileName(
+                result.FirstName,
+                result.LastName,
+                result.DocumentType,
+                Path.GetExtension(file.FileName));
+        }
 
         return Results.Ok(new
         {
@@ -103,7 +113,8 @@ public static class DocumentIntelligenceEndpoints
             lastNameConfidence = result.LastNameConfidence,
             expectedApplicantName,
             nameMatches,
-            reviewStatus
+            reviewStatus,
+            suggestedFileName
         });
     }
 
@@ -132,5 +143,71 @@ public static class DocumentIntelligenceEndpoints
         return builder
             .ToString()
             .Normalize(NormalizationForm.FormC);
+    }
+
+    private static string? BuildFriendlyFileName(
+        string? firstName,
+        string? lastName,
+        string? documentType,
+        string? extension)
+    {
+        if (string.IsNullOrWhiteSpace(firstName) ||
+            string.IsNullOrWhiteSpace(lastName))
+        {
+            return null;
+        }
+
+        var documentLabel = documentType switch
+        {
+            "idDocument.driverLicense" => "DL",
+            "idDocument.passport" => "Passport",
+            _ => null
+        };
+
+        if (documentLabel is null)
+            return null;
+
+        var safeFirstName = SanitizeFilePart(firstName);
+        var safeLastName = SanitizeFilePart(lastName);
+
+        if (string.IsNullOrWhiteSpace(safeFirstName) ||
+            string.IsNullOrWhiteSpace(safeLastName))
+        {
+            return null;
+        }
+
+        var safeExtension =
+            extension?.ToLowerInvariant() switch
+            {
+                ".pdf" => ".pdf",
+                ".jpg" => ".jpg",
+                ".jpeg" => ".jpeg",
+                ".png" => ".png",
+                _ => ".pdf"
+            };
+
+        return $"{safeFirstName}_{safeLastName}_{documentLabel}{safeExtension}";
+    }
+
+    private static string SanitizeFilePart(string value)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+
+        var cleaned = new string(
+            value.Trim()
+                .Where(c => !invalidChars.Contains(c))
+                .ToArray());
+
+        var parts = cleaned.Split(
+            ' ',
+            StringSplitOptions.RemoveEmptyEntries);
+
+        var normalizedParts = parts.Select(part =>
+            part.Length == 1
+                ? part.ToUpperInvariant()
+                : char.ToUpperInvariant(part[0]) +
+                  part[1..].ToLowerInvariant());
+
+        return string.Join("_", normalizedParts);
     }
 }

@@ -69,7 +69,8 @@ public sealed class InboxMonitor(
 public sealed class MicrosoftGraphInboxClient(
     HttpClient httpClient,
     IConfiguration configuration,
-    TokenCredential credential)
+    TokenCredential credential,
+    DocumentIntelligenceService documentIntelligence)
 {
     private const string GraphBaseUrl = "https://graph.microsoft.com/v1.0";
     private const long MaximumAttachmentBytes = 100L * 1024 * 1024;
@@ -209,30 +210,171 @@ public sealed class MicrosoftGraphInboxClient(
            var attachmentKey = Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(attachmentId)))[..12];
 
-            var fileName = Sanitize(
-                 $"{receivedAt.UtcDateTime:yyyyMMdd_HHmmss}_{messageKey}_{attachmentKey}_{name}",
-                180);
-            var filePath = $"{destination.FolderPath}/{fileName}";
-            if (await DriveItemExistsAsync(filePath, accessToken, cancellationToken))
-                continue;
-
-            var contentUri = new Uri(
-                $"{GraphBaseUrl}/users/{mailbox}/messages/{Uri.EscapeDataString(messageId)}" +
-                $"/attachments/{Uri.EscapeDataString(attachmentId)}/$value");
-            using var download = await SendGraphContentAsync(
-                HttpMethod.Get,
-                contentUri,
+            if (await DestinationContainsAttachmentKeyAsync(
+                destination.FolderPath,
+                attachmentKey,
                 accessToken,
-                cancellationToken);
-            var bytes = await download.Content.ReadAsByteArrayAsync(cancellationToken);
-            if (bytes.LongLength > MaximumAttachmentBytes)
+                cancellationToken))
             {
-                log($"[{DateTime.Now:T}] Skipped attachment '{name}' because it exceeds 100 MB.");
                 continue;
             }
+            // Preserve the existing deterministic technical filename as the fallback.
+var technicalFileName = Sanitize(
+    $"{receivedAt.UtcDateTime:yyyyMMdd_HHmmss}_{messageKey}_{attachmentKey}_{name}",
+    180);
 
-            await UploadFileAsync(filePath, bytes, accessToken, cancellationToken);
-            saved++;
+var technicalFilePath =
+    $"{destination.FolderPath}/{technicalFileName}";
+
+// Preserve the existing duplicate-message protection.
+// If this attachment was previously saved using the technical filename,
+// do not download/process it again.
+if (await DriveItemExistsAsync(
+        technicalFilePath,
+        accessToken,
+        cancellationToken))
+{
+    continue;
+}
+
+var contentUri = new Uri(
+    $"{GraphBaseUrl}/users/{mailbox}/messages/{Uri.EscapeDataString(messageId)}" +
+    $"/attachments/{Uri.EscapeDataString(attachmentId)}/$value");
+
+using var download = await SendGraphContentAsync(
+    HttpMethod.Get,
+    contentUri,
+    accessToken,
+    cancellationToken);
+
+var bytes =
+    await download.Content.ReadAsByteArrayAsync(
+        cancellationToken);
+
+if (bytes.LongLength > MaximumAttachmentBytes)
+{
+    log(
+        $"[{DateTime.Now:T}] Skipped attachment '{name}' because it exceeds 100 MB.");
+
+    continue;
+}
+
+// Default to the existing technical filename.
+// Document Intelligence is an enhancement, not a requirement.
+var finalFileName = technicalFileName;
+
+const long maximumDocumentIntelligenceBytes =
+    4L * 1024 * 1024;
+
+var extension =
+    Path.GetExtension(name);
+
+var documentIntelligenceEligible =
+    bytes.LongLength > 0 &&
+    bytes.LongLength <= maximumDocumentIntelligenceBytes &&
+    extension is not null &&
+    (
+        extension.Equals(
+            ".pdf",
+            StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(
+            ".jpg",
+            StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(
+            ".jpeg",
+            StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(
+            ".png",
+            StringComparison.OrdinalIgnoreCase)
+    );
+
+if (documentIntelligenceEligible)
+{
+    try
+    {
+        var namingResult =
+            await documentIntelligence.AnalyzeForNamingAsync(
+                bytes,
+                name,
+                cancellationToken);
+
+        if (namingResult.IsAutoNameCandidate &&
+            !string.IsNullOrWhiteSpace(
+                namingResult.SuggestedFileName))
+        {
+            var suggestedExtension =
+    Path.GetExtension(
+        namingResult.SuggestedFileName);
+
+var suggestedBaseName =
+    Path.GetFileNameWithoutExtension(
+        namingResult.SuggestedFileName);
+
+finalFileName = Sanitize(
+    $"{suggestedBaseName}_{attachmentKey}{suggestedExtension}",
+    180);
+
+            log(
+                $"[{DateTime.Now:T}] Document Intelligence suggested friendly filename '{finalFileName}'.");
+        }
+    }
+    catch (OperationCanceledException)
+        when (cancellationToken.IsCancellationRequested)
+    {
+        throw;
+    }
+    catch (Exception exception)
+    {
+        log(
+            $"[{DateTime.Now:T}] Document Intelligence naming failed for '{name}'. Using existing technical filename. {exception.Message}");
+
+        finalFileName = technicalFileName;
+    }
+}
+
+var finalFilePath =
+    $"{destination.FolderPath}/{finalFileName}";
+
+// Avoid overwriting an existing friendly-named document.
+if (!string.Equals(
+        finalFileName,
+        technicalFileName,
+        StringComparison.OrdinalIgnoreCase) &&
+    await DriveItemExistsAsync(
+        finalFilePath,
+        accessToken,
+        cancellationToken))
+{
+    var extensionForCollision =
+        Path.GetExtension(finalFileName);
+
+    var baseName =
+        Path.GetFileNameWithoutExtension(finalFileName);
+
+    finalFileName = Sanitize(
+        $"{baseName}_{receivedAt.UtcDateTime:yyyyMMdd_HHmmss}_{attachmentKey}{extensionForCollision}",
+        180);
+
+    finalFilePath =
+        $"{destination.FolderPath}/{finalFileName}";
+}
+
+// A final collision means this exact target already exists.
+if (await DriveItemExistsAsync(
+        finalFilePath,
+        accessToken,
+        cancellationToken))
+{
+    continue;
+}
+
+await UploadFileAsync(
+    finalFilePath,
+    bytes,
+    accessToken,
+    cancellationToken);
+
+saved++;
         }
 
         return saved;
@@ -314,7 +456,73 @@ public sealed class MicrosoftGraphInboxClient(
         using var item = await TryGetDriveItemAsync(path, accessToken, cancellationToken);
         return item is not null;
     }
+    private async Task<bool>
+    DestinationContainsAttachmentKeyAsync(
+        string folderPath,
+        string attachmentKey,
+        string accessToken,
+        CancellationToken cancellationToken)
+{
+    var driveId =
+        Uri.EscapeDataString(
+            RequiredSetting("SharePoint:DriveId"));
 
+    var escapedFolderPath =
+        EscapePath(folderPath);
+
+    Uri? nextUri = new(
+        $"{GraphBaseUrl}/drives/{driveId}/root:/{escapedFolderPath}:/children" +
+        "?$select=name&$top=200");
+
+    while (nextUri is not null)
+    {
+        using var page = await SendGraphAsync(
+            HttpMethod.Get,
+            nextUri,
+            accessToken,
+            cancellationToken);
+
+        if (!page.RootElement.TryGetProperty(
+                "value",
+                out var items) ||
+            items.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException(
+                "Microsoft Graph did not return the destination folder contents.");
+        }
+
+        foreach (var item in items.EnumerateArray())
+        {
+            var existingName =
+                GetString(item, "name");
+
+            if (!string.IsNullOrWhiteSpace(existingName) &&
+                existingName.Contains(
+                    attachmentKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        nextUri =
+            page.RootElement.TryGetProperty(
+                "@odata.nextLink",
+                out var nextLink) &&
+            Uri.TryCreate(
+                nextLink.GetString(),
+                UriKind.Absolute,
+                out var parsedNextLink) &&
+            string.Equals(
+                parsedNextLink.Host,
+                "graph.microsoft.com",
+                StringComparison.OrdinalIgnoreCase)
+                ? parsedNextLink
+                : null;
+    }
+
+    return false;
+}
     private async Task<JsonDocument?> TryGetDriveItemAsync(
         string path,
         string accessToken,

@@ -11,6 +11,16 @@ public sealed record IdentityDocumentResult(
     string? LastName,
     double? LastNameConfidence);
 
+public sealed record IdentityDocumentNamingResult(
+    bool IsAutoNameCandidate,
+    string? SuggestedFileName,
+    string? DocumentType,
+    double? DocumentConfidence,
+    string? FirstName,
+    double? FirstNameConfidence,
+    string? LastName,
+    double? LastNameConfidence);
+
 public sealed class DocumentIntelligenceService
 {
     private readonly DocumentIntelligenceClient _client;
@@ -54,6 +64,7 @@ public sealed class DocumentIntelligenceService
             cancellationToken);
 
         AnalyzeResult result = operation.Value;
+
         AnalyzedDocument? document =
             result.Documents.FirstOrDefault();
 
@@ -76,7 +87,6 @@ public sealed class DocumentIntelligenceService
             document,
             "LastName");
 
-
         return new IdentityDocumentResult(
             DocumentType: document.DocumentType,
             DocumentConfidence: document.Confidence,
@@ -84,6 +94,76 @@ public sealed class DocumentIntelligenceService
             FirstNameConfidence: firstName.Confidence,
             LastName: lastName.Value,
             LastNameConfidence: lastName.Confidence);
+    }
+
+    public async Task<IdentityDocumentNamingResult>
+        AnalyzeForNamingAsync(
+            byte[] documentBytes,
+            string originalFileName,
+            CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(documentBytes);
+
+        if (string.IsNullOrWhiteSpace(originalFileName))
+        {
+            throw new ArgumentException(
+                "Original filename cannot be empty.",
+                nameof(originalFileName));
+        }
+
+        var result = await AnalyzeIdentityDocumentAsync(
+            documentBytes,
+            cancellationToken);
+
+        bool supportedDocumentType =
+            result.DocumentType is
+                "idDocument.driverLicense" or
+                "idDocument.passport";
+
+        bool autoNameCandidate =
+            supportedDocumentType &&
+            result.DocumentConfidence >= 0.90 &&
+            result.FirstNameConfidence >= 0.70 &&
+            result.LastNameConfidence >= 0.70 &&
+            !string.IsNullOrWhiteSpace(result.FirstName) &&
+            !string.IsNullOrWhiteSpace(result.LastName);
+
+        string? suggestedFileName = null;
+
+        if (autoNameCandidate)
+        {
+            suggestedFileName = BuildFriendlyFileName(
+                result.FirstName!,
+                result.LastName!,
+                result.DocumentType!,
+                Path.GetExtension(originalFileName));
+        }
+
+        return new IdentityDocumentNamingResult(
+            IsAutoNameCandidate:
+                autoNameCandidate &&
+                !string.IsNullOrWhiteSpace(suggestedFileName),
+
+            SuggestedFileName:
+                suggestedFileName,
+
+            DocumentType:
+                result.DocumentType,
+
+            DocumentConfidence:
+                result.DocumentConfidence,
+
+            FirstName:
+                result.FirstName,
+
+            FirstNameConfidence:
+                result.FirstNameConfidence,
+
+            LastName:
+                result.LastName,
+
+            LastNameConfidence:
+                result.LastNameConfidence);
     }
 
     private static (string? Value, double? Confidence)
@@ -110,5 +190,74 @@ public sealed class DocumentIntelligenceService
                 ? null
                 : value.Trim(),
             field.Confidence);
+    }
+
+    private static string? BuildFriendlyFileName(
+        string firstName,
+        string lastName,
+        string documentType,
+        string? extension)
+    {
+        string? documentLabel = documentType switch
+        {
+            "idDocument.driverLicense" => "DL",
+            "idDocument.passport" => "Passport",
+            _ => null
+        };
+
+        if (documentLabel is null)
+            return null;
+
+        string safeFirstName =
+            SanitizeFilePart(firstName);
+
+        string safeLastName =
+            SanitizeFilePart(lastName);
+
+        if (string.IsNullOrWhiteSpace(safeFirstName) ||
+            string.IsNullOrWhiteSpace(safeLastName))
+        {
+            return null;
+        }
+
+        string safeExtension =
+            extension?.ToLowerInvariant() switch
+            {
+                ".pdf" => ".pdf",
+                ".jpg" => ".jpg",
+                ".jpeg" => ".jpeg",
+                ".png" => ".png",
+                _ => ".pdf"
+            };
+
+        return
+            $"{safeFirstName}_{safeLastName}_{documentLabel}{safeExtension}";
+    }
+
+    private static string SanitizeFilePart(
+        string value)
+    {
+        var invalidCharacters =
+            Path.GetInvalidFileNameChars();
+
+        var cleaned = new string(
+            value.Trim()
+                .Where(character =>
+                    !invalidCharacters.Contains(character))
+                .ToArray());
+
+        var parts = cleaned.Split(
+            ' ',
+            StringSplitOptions.RemoveEmptyEntries);
+
+        var normalizedParts = parts.Select(part =>
+            part.Length == 1
+                ? part.ToUpperInvariant()
+                : char.ToUpperInvariant(part[0]) +
+                  part[1..].ToLowerInvariant());
+
+        return string.Join(
+            "_",
+            normalizedParts);
     }
 }

@@ -9,7 +9,15 @@
 
     <p>Select one authorised/redacted driver licence or passport.</p>
 
-    <input id="file" type="file"
+    <p>
+        Expected applicant name:
+        <input id="expectedName"
+               type="text"
+               placeholder="First name Last name">
+    </p>
+
+    <input id="file"
+           type="file"
            accept=".pdf,.jpg,.jpeg,.png">
 
     <button id="testButton">Run test</button>
@@ -19,13 +27,24 @@
     <script>
         const button = document.getElementById("testButton");
         const fileInput = document.getElementById("file");
+        const expectedNameInput =
+            document.getElementById("expectedName");
         const result = document.getElementById("result");
 
         button.addEventListener("click", async () => {
             const file = fileInput.files[0];
+            const expectedName =
+                expectedNameInput.value.trim();
+
+            if (!expectedName) {
+                result.textContent =
+                    "Please enter the expected applicant name.";
+                return;
+            }
 
             if (!file) {
-                result.textContent = "Please select a file.";
+                result.textContent =
+                    "Please select a file.";
                 return;
             }
 
@@ -37,6 +56,9 @@
 
             const data = new FormData();
             data.append("file", file);
+            data.append(
+                "expectedApplicantName",
+                expectedName);
 
             result.textContent = "Analyzing...";
 
@@ -51,7 +73,8 @@
                 const text = await response.text();
 
                 result.textContent =
-                    "HTTP " + response.status + "\n\n" + text;
+                    "HTTP " + response.status +
+                    "\n\n" + text;
             }
             catch (error) {
                 result.textContent =
