@@ -21,6 +21,17 @@ public sealed record IdentityDocumentNamingResult(
     string? LastName,
     double? LastNameConfidence);
 
+public sealed record DocumentKeyValueResult(
+    string Key,
+    string? Value,
+    double Confidence);
+
+public sealed record PayslipAnalysisResult(
+    bool LooksLikePayslip,
+    string Content,
+    IReadOnlyList<DocumentKeyValueResult> KeyValuePairs);
+
+
 public sealed class DocumentIntelligenceService
 {
     private readonly DocumentIntelligenceClient _client;
@@ -166,6 +177,64 @@ public sealed class DocumentIntelligenceService
                 result.LastNameConfidence);
     }
 
+public async Task<PayslipAnalysisResult>
+    AnalyzePayslipAsync(
+        byte[] documentBytes,
+        CancellationToken cancellationToken = default)
+{
+    ArgumentNullException.ThrowIfNull(documentBytes);
+
+    if (documentBytes.Length == 0)
+    {
+        throw new ArgumentException(
+            "Document cannot be empty.",
+            nameof(documentBytes));
+    }
+
+    var options = new AnalyzeDocumentOptions(
+        "prebuilt-layout",
+        BinaryData.FromBytes(documentBytes));
+
+    options.Features.Add(
+        DocumentAnalysisFeature.KeyValuePairs);
+
+    var operation = await _client.AnalyzeDocumentAsync(
+        WaitUntil.Completed,
+        options,
+        cancellationToken);
+
+    AnalyzeResult result = operation.Value;
+
+    var pairs = result.KeyValuePairs
+        .Where(pair =>
+            !string.IsNullOrWhiteSpace(
+                pair.Key?.Content))
+        .Select(pair =>
+            new DocumentKeyValueResult(
+                Key: pair.Key.Content.Trim(),
+                Value:
+                    string.IsNullOrWhiteSpace(
+                        pair.Value?.Content)
+                        ? null
+                        : pair.Value.Content.Trim(),
+                Confidence: pair.Confidence))
+        .ToArray();
+
+    string content =
+        result.Content?.Trim() ?? string.Empty;
+
+    bool looksLikePayslip =
+        ContainsPayslipIndicators(
+            content,
+            pairs);
+
+    return new PayslipAnalysisResult(
+        LooksLikePayslip: looksLikePayslip,
+        Content: content,
+        KeyValuePairs: pairs);
+}
+
+
     private static (string? Value, double? Confidence)
         GetStringField(
             AnalyzedDocument document,
@@ -260,4 +329,40 @@ public sealed class DocumentIntelligenceService
             "_",
             normalizedParts);
     }
+    private static bool ContainsPayslipIndicators(
+    string content,
+    IReadOnlyList<DocumentKeyValueResult> pairs)
+{
+    string searchableText = string.Join(
+        " ",
+        new[]
+        {
+            content,
+            string.Join(
+                " ",
+                pairs.Select(pair =>
+                    $"{pair.Key} {pair.Value}"))
+        });
+
+    string[] indicators =
+    [
+        "payslip",
+        "pay slip",
+        "pay period",
+        "pay date",
+        "pay day",
+        "gross pay",
+        "net pay",
+        "ordinary earnings",
+        "payg withholding",
+        "superannuation"
+    ];
+
+    int matches = indicators.Count(indicator =>
+        searchableText.Contains(
+            indicator,
+            StringComparison.OrdinalIgnoreCase));
+
+    return matches >= 2;
+}
 }

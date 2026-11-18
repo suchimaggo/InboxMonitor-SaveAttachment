@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using System.Globalization;
 using System.Text;
 namespace InboxReader;
+using Azure;
 
 public static class DocumentIntelligenceEndpoints
 {
@@ -15,6 +16,20 @@ public static class DocumentIntelligenceEndpoints
             .WithSummary("Test Document Intelligence")
             .WithDescription(
                 "Analyzes one uploaded identity document without saving it.")
+            .DisableAntiforgery();
+
+        api.MapPost("/payslip-test", TestPayslip)
+            .WithName("TestPayslipDocumentIntelligence")
+            .WithSummary("Test Australian payslip extraction")
+            .WithDescription(
+                "Analyzes one uploaded payslip without saving it.")
+            .DisableAntiforgery();
+
+        api.MapPost("/upload-check", UploadCheck)
+            .WithName("DocumentIntelligenceUploadCheck")
+            .WithSummary("Test multipart file upload")
+            .WithDescription(
+                "Confirms that an uploaded file reaches the application without running Document Intelligence.")
             .DisableAntiforgery();
 
         return app;
@@ -117,6 +132,237 @@ public static class DocumentIntelligenceEndpoints
             suggestedFileName
         });
     }
+
+    private static async Task<IResult> TestPayslip(
+    HttpRequest request,
+    DocumentIntelligenceService service,
+    CancellationToken cancellationToken)
+{
+    var form =
+        await request.ReadFormAsync(cancellationToken);
+
+    var file =
+        form.Files.GetFile("file");
+
+    if (file is null)
+    {
+        return Results.BadRequest(new
+        {
+            error = "Payslip file is required."
+        });
+    }
+
+    if (file.Length == 0)
+    {
+        return Results.BadRequest(new
+        {
+            error = "Payslip file is empty."
+        });
+    }
+
+    const long maxBytes =
+        4L * 1024 * 1024;
+
+    if (file.Length > maxBytes)
+    {
+        return Results.BadRequest(new
+        {
+            error = "Payslip exceeds the 4 MB pilot limit."
+        });
+    }
+
+    var extension =
+        Path.GetExtension(file.FileName);
+
+    bool supportedFile =
+        extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".png", StringComparison.OrdinalIgnoreCase);
+
+    if (!supportedFile)
+    {
+        return Results.BadRequest(new
+        {
+            error = "Use PDF, JPG, JPEG or PNG for the payslip test."
+        });
+    }
+
+    await using var stream =
+        file.OpenReadStream();
+
+    using var memory =
+        new MemoryStream();
+
+    await stream.CopyToAsync(
+        memory,
+        cancellationToken);
+
+    PayslipAnalysisResult result;
+
+try
+{
+    result =
+        await service.AnalyzePayslipAsync(
+            memory.ToArray(),
+            cancellationToken);
+}
+catch (OperationCanceledException)
+    when (cancellationToken.IsCancellationRequested)
+{
+    return Results.Json(
+        new
+        {
+            success = false,
+            stage = "PayslipAnalysis",
+            message = "The payslip request was cancelled."
+        },
+        statusCode: StatusCodes.Status408RequestTimeout);
+}
+catch (Azure.RequestFailedException exception)
+{
+    return Results.Json(
+        new
+        {
+            success = false,
+            stage = "DocumentIntelligence",
+            status = exception.Status,
+            errorCode = exception.ErrorCode,
+            message = exception.Message
+        },
+        statusCode: StatusCodes.Status502BadGateway);
+}
+catch (Exception exception)
+{
+    return Results.Json(
+        new
+        {
+            success = false,
+            stage = "PayslipAnalysis",
+            errorType = exception.GetType().Name,
+            message = exception.Message
+        },
+        statusCode:
+            StatusCodes.Status500InternalServerError);
+}
+
+
+    var keyValuePairs =
+        result.KeyValuePairs
+            .Select(pair => new
+            {
+                key = pair.Key,
+                value = pair.Value,
+                confidence = pair.Confidence
+            })
+            .ToArray();
+
+    const int maximumPreviewCharacters = 3000;
+
+    string contentPreview =
+        result.Content.Length <= maximumPreviewCharacters
+            ? result.Content
+            : result.Content[..maximumPreviewCharacters];
+
+    return Results.Ok(new
+    {
+        success = true,
+        looksLikePayslip = result.LooksLikePayslip,
+        keyValuePairs,
+        contentPreview
+    });
+}
+
+
+private static async Task<IResult> UploadCheck(
+    HttpRequest request,
+    CancellationToken cancellationToken)
+{
+    try
+    {
+        var contentType =
+            request.ContentType ?? string.Empty;
+
+        if (!request.HasFormContentType)
+        {
+            return Results.Json(
+                new
+                {
+                    success = false,
+                    stage = "ContentTypeCheck",
+                    contentType,
+                    error = "Request is not multipart form data."
+                },
+                statusCode:
+                    StatusCodes.Status400BadRequest);
+        }
+
+        var form =
+            await request.ReadFormAsync(
+                cancellationToken);
+
+        var file =
+            form.Files.GetFile("file");
+
+        if (file is null)
+        {
+            return Results.Json(
+                new
+                {
+                    success = false,
+                    stage = "GetFile",
+                    fileCount = form.Files.Count,
+                    error = "No file received."
+                },
+                statusCode:
+                    StatusCodes.Status400BadRequest);
+        }
+
+        return Results.Json(
+            new
+            {
+                success = true,
+                stage = "UploadCheck",
+                fileReceived = true,
+                fileCount = form.Files.Count,
+                fileSize = file.Length,
+                extension =
+                    Path.GetExtension(file.FileName)
+            },
+            statusCode:
+                StatusCodes.Status200OK);
+    }
+    catch (OperationCanceledException exception)
+    {
+        return Results.Json(
+            new
+            {
+                success = false,
+                stage = "ReadFormAsync",
+                errorType =
+                    exception.GetType().Name,
+                message =
+                    "Upload request was cancelled."
+            },
+            statusCode:
+                StatusCodes.Status408RequestTimeout);
+    }
+    catch (Exception exception)
+    {
+        return Results.Json(
+            new
+            {
+                success = false,
+                stage = "UploadCheck",
+                errorType =
+                    exception.GetType().FullName,
+                message =
+                    exception.Message
+            },
+            statusCode:
+                StatusCodes.Status500InternalServerError);
+    }
+}
 
     private static string NormalizeName(string? value)
     {

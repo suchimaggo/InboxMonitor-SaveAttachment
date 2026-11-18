@@ -302,7 +302,7 @@ if (documentIntelligenceEligible)
             !string.IsNullOrWhiteSpace(
                 namingResult.SuggestedFileName))
         {
-            var suggestedExtension =
+           var suggestedExtension =
     Path.GetExtension(
         namingResult.SuggestedFileName);
 
@@ -310,9 +310,18 @@ var suggestedBaseName =
     Path.GetFileNameWithoutExtension(
         namingResult.SuggestedFileName);
 
-finalFileName = Sanitize(
-    $"{suggestedBaseName}_{attachmentKey}{suggestedExtension}",
-    180);
+var requiredSuffix =
+    $"_{attachmentKey}{suggestedExtension}";
+
+var maximumBaseNameLength =
+    180 - requiredSuffix.Length;
+
+suggestedBaseName = Sanitize(
+    suggestedBaseName,
+    maximumBaseNameLength);
+
+finalFileName =
+    $"{suggestedBaseName}{requiredSuffix}";
 
             log(
                 $"[{DateTime.Now:T}] Document Intelligence suggested friendly filename '{finalFileName}'.");
@@ -334,30 +343,6 @@ finalFileName = Sanitize(
 
 var finalFilePath =
     $"{destination.FolderPath}/{finalFileName}";
-
-// Avoid overwriting an existing friendly-named document.
-if (!string.Equals(
-        finalFileName,
-        technicalFileName,
-        StringComparison.OrdinalIgnoreCase) &&
-    await DriveItemExistsAsync(
-        finalFilePath,
-        accessToken,
-        cancellationToken))
-{
-    var extensionForCollision =
-        Path.GetExtension(finalFileName);
-
-    var baseName =
-        Path.GetFileNameWithoutExtension(finalFileName);
-
-    finalFileName = Sanitize(
-        $"{baseName}_{receivedAt.UtcDateTime:yyyyMMdd_HHmmss}_{attachmentKey}{extensionForCollision}",
-        180);
-
-    finalFilePath =
-        $"{destination.FolderPath}/{finalFileName}";
-}
 
 // A final collision means this exact target already exists.
 if (await DriveItemExistsAsync(

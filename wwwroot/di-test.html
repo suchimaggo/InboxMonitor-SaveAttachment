@@ -24,6 +24,22 @@
 
     <pre id="result"></pre>
 
+    <hr>
+
+<h2>Australian Payslip Test</h2>
+
+<p>Upload one authorised/redacted Australian payslip.</p>
+
+<input id="payslipFile"
+       type="file"
+       accept=".pdf,.jpg,.jpeg,.png">
+
+<button id="payslipButton">
+    Run payslip test
+</button>
+
+<pre id="payslipResult"></pre>
+
     <script>
         const button = document.getElementById("testButton");
         const fileInput = document.getElementById("file");
@@ -81,6 +97,57 @@
                     "Request failed: " + error;
             }
         });
+        const payslipButton =
+    document.getElementById("payslipButton");
+
+const payslipFile =
+    document.getElementById("payslipFile");
+
+const payslipResult =
+    document.getElementById("payslipResult");
+
+payslipButton.addEventListener("click", async () => {
+    const file = payslipFile.files[0];
+
+    if (!file) {
+        payslipResult.textContent =
+            "Please select a payslip.";
+        return;
+    }
+
+    if (file.size > 4 * 1024 * 1024) {
+        payslipResult.textContent =
+            "File is over the 4 MB pilot limit.";
+        return;
+    }
+
+    const data = new FormData();
+    data.append("file", file);
+
+    payslipResult.textContent =
+        "Analyzing payslip...";
+
+    try {
+        const response = await fetch(
+            "/api/document-intelligence/payslip-test",
+            {
+                method: "POST",
+                body: data
+            });
+
+        const text = await response.text();
+
+        payslipResult.textContent =
+            "HTTP " +
+            response.status +
+            "\n\n" +
+            text;
+    }
+    catch (error) {
+        payslipResult.textContent =
+            "Request failed: " + error;
+    }
+});
     </script>
 </body>
 </html>
