@@ -268,6 +268,12 @@ catch (Exception exception)
     {
         success = true,
         looksLikePayslip = result.LooksLikePayslip,
+        payPeriodStart = result.PayPeriodStart,
+        payPeriodEnd = result.PayPeriodEnd,
+        periodLabel = result.PeriodLabel,
+        employeeNameCandidate = result.EmployeeNameCandidate,
+        employeeNameSource = result.EmployeeNameSource,
+        payPeriodConfidence = result.PayPeriodConfidence,
         keyValuePairs,
         contentPreview
     });

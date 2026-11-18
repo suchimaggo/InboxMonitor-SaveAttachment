@@ -2,6 +2,7 @@ using Azure;
 using Azure.AI.DocumentIntelligence;
 using Azure.Core;
 using Microsoft.Extensions.Configuration;
+using System.Globalization;
 
 public sealed record IdentityDocumentResult(
     string? DocumentType,
@@ -29,7 +30,13 @@ public sealed record DocumentKeyValueResult(
 public sealed record PayslipAnalysisResult(
     bool LooksLikePayslip,
     string Content,
-    IReadOnlyList<DocumentKeyValueResult> KeyValuePairs);
+    IReadOnlyList<DocumentKeyValueResult> KeyValuePairs,
+    DateOnly? PayPeriodStart,
+    DateOnly? PayPeriodEnd,
+    string? PeriodLabel,
+    double? PayPeriodConfidence,
+    string? EmployeeNameCandidate,
+    string? EmployeeNameSource);
 
 
 public sealed class DocumentIntelligenceService
@@ -228,10 +235,22 @@ public async Task<PayslipAnalysisResult>
             content,
             pairs);
 
+    var payPeriod =
+        ExtractPayPeriod(pairs);
+
+    var employeeName =
+        ExtractEmployeeNameCandidate(content);
+
     return new PayslipAnalysisResult(
         LooksLikePayslip: looksLikePayslip,
         Content: content,
-        KeyValuePairs: pairs);
+        KeyValuePairs: pairs,
+        PayPeriodStart: payPeriod.Start,
+        PayPeriodEnd: payPeriod.End,
+        PeriodLabel: payPeriod.Label,
+        PayPeriodConfidence: payPeriod.Confidence,
+        EmployeeNameCandidate: employeeName.Name,
+        EmployeeNameSource: employeeName.Source);
 }
 
 
@@ -364,5 +383,223 @@ public async Task<PayslipAnalysisResult>
             StringComparison.OrdinalIgnoreCase));
 
     return matches >= 2;
+}
+private static (
+    DateOnly? Start,
+    DateOnly? End,
+    string? Label,
+    double? Confidence)
+    ExtractPayPeriod(
+        IReadOnlyList<DocumentKeyValueResult> pairs)
+{
+    var pair = pairs.FirstOrDefault(pair =>
+    {
+        var normalizedKey =
+            pair.Key
+                .Trim()
+                .TrimEnd(':');
+
+        return normalizedKey.Equals(
+            "Pay Period",
+            StringComparison.OrdinalIgnoreCase);
+    });
+
+    if (pair is null ||
+        string.IsNullOrWhiteSpace(pair.Value))
+    {
+        return (null, null, null, null);
+    }
+
+    var parts = pair.Value.Split(
+        " to ",
+        StringSplitOptions.TrimEntries |
+        StringSplitOptions.RemoveEmptyEntries);
+
+    if (parts.Length != 2)
+    {
+        return (
+            null,
+            null,
+            null,
+            pair.Confidence);
+    }
+
+    const string format =
+        "dd-MMM-yyyy";
+
+    if (!DateOnly.TryParseExact(
+            parts[0],
+            format,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var start))
+    {
+        return (
+            null,
+            null,
+            null,
+            pair.Confidence);
+    }
+
+    if (!DateOnly.TryParseExact(
+            parts[1],
+            format,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var end))
+    {
+        return (
+            null,
+            null,
+            null,
+            pair.Confidence);
+    }
+
+    string label;
+
+    if (start.Year == end.Year &&
+        start.Month == end.Month)
+    {
+        label =
+            $"{start:yyyy-MM}";
+    }
+    else
+    {
+        label =
+            $"{start:yyyy-MM-dd}_to_{end:yyyy-MM-dd}";
+    }
+
+    return (
+        start,
+        end,
+        label,
+        pair.Confidence);
+    }
+
+    private static (
+    string? Name,
+    string? Source)
+    ExtractEmployeeNameCandidate(
+        string content)
+{
+    if (string.IsNullOrWhiteSpace(content))
+        return (null, null);
+
+    var lines = content
+        .Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries)
+        .Where(line =>
+            !string.IsNullOrWhiteSpace(line))
+        .ToArray();
+
+    if (lines.Length < 2)
+        return (null, null);
+
+    var payMarkerIndex =
+        Array.FindIndex(
+            lines,
+            line =>
+                line.StartsWith(
+                    "Pay Day",
+                    StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith(
+                    "Pay Period",
+                    StringComparison.OrdinalIgnoreCase));
+
+    if (payMarkerIndex <= 0)
+        return (null, null);
+
+    // Only inspect the small header block before payroll fields.
+    var headerLines =
+        lines
+            .Take(payMarkerIndex)
+            .Take(6)
+            .ToArray();
+
+    foreach (var line in headerLines)
+    {
+        if (line.StartsWith(
+                "Payslip",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        var candidate =
+            ExtractLeadingPersonName(line);
+
+        if (!string.IsNullOrWhiteSpace(candidate))
+        {
+            return (
+                candidate,
+                "HeaderBeforePayPeriod");
+        }
+    }
+
+    return (null, null);
+}
+
+private static string?
+    ExtractLeadingPersonName(
+        string line)
+{
+    if (string.IsNullOrWhiteSpace(line))
+        return null;
+
+    var tokens =
+        line.Split(
+            ' ',
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries);
+
+    if (tokens.Length < 2)
+        return null;
+
+    var nameTokens =
+        new List<string>();
+
+    foreach (var token in tokens)
+    {
+        var cleaned =
+            token.Trim(',', '.', ';', ':');
+
+        if (string.IsNullOrWhiteSpace(cleaned))
+            break;
+
+        // Numbers normally indicate the start of an address,
+        // postcode, employee number, etc.
+        if (cleaned.Any(char.IsDigit))
+            break;
+
+        // Don't consume obvious payroll/header terminology.
+        if (cleaned.Equals("Pay", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("Payslip", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("Payroll", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("Employee", StringComparison.OrdinalIgnoreCase))
+        {
+            break;
+        }
+
+        // Name tokens should be predominantly alphabetic.
+        if (!cleaned.All(character =>
+                char.IsLetter(character) ||
+                character is '-' or '\''))
+        {
+            break;
+        }
+
+        nameTokens.Add(cleaned);
+
+        // Conservative maximum for this pilot.
+        if (nameTokens.Count == 4)
+            break;
+    }
+
+    if (nameTokens.Count is < 2 or > 4)
+        return null;
+
+    return string.Join(" ", nameTokens);
 }
 }
