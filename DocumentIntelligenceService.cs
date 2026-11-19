@@ -397,9 +397,11 @@ private static (
         var normalizedKey =
             pair.Key
                 .Trim()
+                .Replace("\r", " ")
+                .Replace("\n", " ")
                 .TrimEnd(':');
 
-        return normalizedKey.Equals(
+        return normalizedKey.StartsWith(
             "Pay Period",
             StringComparison.OrdinalIgnoreCase);
     });
@@ -410,51 +412,84 @@ private static (
         return (null, null, null, null);
     }
 
-    var parts = pair.Value.Split(
+    var value =
+        pair.Value.Trim();
+
+    DateOnly start;
+    DateOnly end;
+
+    // Format 1:
+    // 01-Sep-2026 to 30-Sep-2026
+    var textParts = value.Split(
         " to ",
         StringSplitOptions.TrimEntries |
         StringSplitOptions.RemoveEmptyEntries);
 
-    if (parts.Length != 2)
+    if (textParts.Length == 2 &&
+        TryParsePayslipDate(textParts[0], out start) &&
+        TryParsePayslipDate(textParts[1], out end))
     {
-        return (
-            null,
-            null,
-            null,
+        return BuildPayPeriodResult(
+            start,
+            end,
             pair.Confidence);
     }
 
-    const string format =
-        "dd-MMM-yyyy";
+    // Format 2:
+    // 27/09/2026 - 10/10/2026
+    var dashParts = value.Split(
+        " - ",
+        StringSplitOptions.TrimEntries |
+        StringSplitOptions.RemoveEmptyEntries);
 
-    if (!DateOnly.TryParseExact(
-            parts[0],
-            format,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.None,
-            out var start))
+    if (dashParts.Length == 2 &&
+        TryParsePayslipDate(dashParts[0], out start) &&
+        TryParsePayslipDate(dashParts[1], out end))
     {
-        return (
-            null,
-            null,
-            null,
+        return BuildPayPeriodResult(
+            start,
+            end,
             pair.Confidence);
     }
 
-    if (!DateOnly.TryParseExact(
-            parts[1],
-            format,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.None,
-            out var end))
-    {
-        return (
-            null,
-            null,
-            null,
-            pair.Confidence);
-    }
+    return (
+        null,
+        null,
+        null,
+        pair.Confidence);
+}
 
+
+private static bool TryParsePayslipDate(
+    string value,
+    out DateOnly date)
+{
+    string[] formats =
+    [
+        "dd-MMM-yyyy",
+        "d-MMM-yyyy",
+        "dd/MM/yyyy",
+        "d/MM/yyyy"
+    ];
+
+    return DateOnly.TryParseExact(
+        value.Trim(),
+        formats,
+        CultureInfo.InvariantCulture,
+        DateTimeStyles.None,
+        out date);
+}
+
+private static (
+    DateOnly? Start,
+    DateOnly? End,
+    string? Label,
+    double? Confidence)
+    BuildPayPeriodResult(
+        DateOnly start,
+        DateOnly end,
+        double confidence)
+{
     string label;
 
     if (start.Year == end.Year &&
@@ -473,17 +508,19 @@ private static (
         start,
         end,
         label,
-        pair.Confidence);
-    }
+        confidence);
+}
 
-    private static (
+private static (
     string? Name,
     string? Source)
     ExtractEmployeeNameCandidate(
         string content)
 {
     if (string.IsNullOrWhiteSpace(content))
+    {
         return (null, null);
+    }
 
     var lines = content
         .Split(
@@ -495,7 +532,9 @@ private static (
         .ToArray();
 
     if (lines.Length < 2)
+    {
         return (null, null);
+    }
 
     var payMarkerIndex =
         Array.FindIndex(
@@ -505,24 +544,39 @@ private static (
                     "Pay Day",
                     StringComparison.OrdinalIgnoreCase) ||
                 line.StartsWith(
+                    "Pay Date",
+                    StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith(
+                    "Payment Date",
+                    StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith(
                     "Pay Period",
+                    StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith(
+                    "Employment Details",
                     StringComparison.OrdinalIgnoreCase));
 
     if (payMarkerIndex <= 0)
+    {
         return (null, null);
+    }
 
-    // Only inspect the small header block before payroll fields.
-    var headerLines =
-        lines
-            .Take(payMarkerIndex)
-            .Take(6)
-            .ToArray();
+    // Inspect only the document header before payroll details.
+    var headerLines = lines
+        .Take(payMarkerIndex)
+        .Take(8)
+        .ToArray();
 
     foreach (var line in headerLines)
     {
         if (line.StartsWith(
                 "Payslip",
                 StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (LooksLikeOrganisationHeader(line))
         {
             continue;
         }
@@ -539,6 +593,34 @@ private static (
     }
 
     return (null, null);
+}
+
+private static bool LooksLikeOrganisationHeader(
+    string line)
+{
+    if (string.IsNullOrWhiteSpace(line))
+    {
+        return true;
+    }
+
+    string normalized =
+        $" {line.ToUpperInvariant()} ";
+
+    string[] indicators =
+    [
+        "PAID BY",
+        " PTY ",
+        " LTD ",
+        " LIMITED ",
+        " ABN ",
+        " PAYROLL ",
+        " EMPLOYER "
+    ];
+
+    return indicators.Any(indicator =>
+        normalized.Contains(
+            indicator,
+            StringComparison.OrdinalIgnoreCase));
 }
 
 private static string?
