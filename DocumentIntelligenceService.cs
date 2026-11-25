@@ -247,7 +247,8 @@ public async Task<PayslipAnalysisResult>
         ExtractPayPeriod(pairs);
 
     var employeeName =
-        ExtractEmployeeNameCandidate(content);
+        ExtractStructuredEmployeeName(pairs)
+        ?? ExtractEmployeeNameCandidate(content);
 
     return new PayslipAnalysisResult(
         LooksLikePayslip: looksLikePayslip,
@@ -508,6 +509,7 @@ public PayslipNamingResult
 
     return matches >= 2;
 }
+
 private static (
     DateOnly? Start,
     DateOnly? End,
@@ -516,85 +518,133 @@ private static (
     ExtractPayPeriod(
         IReadOnlyList<DocumentKeyValueResult> pairs)
 {
-    var pair = pairs.FirstOrDefault(pair =>
+    // Strategy 1:
+    // Explicit Pay Period range.
+    var payPeriodPair = pairs.FirstOrDefault(pair =>
     {
         var normalizedKey =
-            pair.Key
-                .Trim()
-                .Replace("\r", " ")
-                .Replace("\n", " ")
-                .TrimEnd(':');
+            NormalizeKey(pair.Key);
 
         return normalizedKey.StartsWith(
             "Pay Period",
             StringComparison.OrdinalIgnoreCase);
     });
 
-    if (pair is null ||
-        string.IsNullOrWhiteSpace(pair.Value))
+    if (payPeriodPair is not null &&
+        !string.IsNullOrWhiteSpace(payPeriodPair.Value))
     {
-        return (null, null, null, null);
+        var parsed =
+            TryParsePayPeriodRange(
+                payPeriodPair.Value,
+                payPeriodPair.Confidence);
+
+        if (parsed.Start is not null &&
+            parsed.End is not null)
+        {
+            return parsed;
+        }
     }
 
-    var value =
-        pair.Value.Trim();
+    // Strategy 2:
+    // Separate Start Date / End Date.
+        var startKeys = new[]
+        {
+        "Start Date",
+        "Period Starting",
+        "Period Start"
+        };
 
-    DateOnly start;
-    DateOnly end;
+        var endKeys = new[]
+        {
+        "End Date",
+        "Period Ending"
+        };
 
-    // Format 1:
-    // 01-Sep-2026 to 30-Sep-2026
-    var textParts = value.Split(
-        " to ",
-        StringSplitOptions.TrimEntries |
-        StringSplitOptions.RemoveEmptyEntries);
+        var startPair = pairs.FirstOrDefault(pair =>
+        {
+        var key = NormalizeKey(pair.Key);
 
-    if (textParts.Length == 2 &&
-        TryParsePayslipDate(textParts[0], out start) &&
-        TryParsePayslipDate(textParts[1], out end))
+        return startKeys.Any(candidate =>
+            key.Equals(
+                candidate,
+                StringComparison.OrdinalIgnoreCase));
+        });
+
+        var endPair = pairs.FirstOrDefault(pair =>
+        {
+        var key = NormalizeKey(pair.Key);
+
+        return endKeys.Any(candidate =>
+            key.Equals(
+                candidate,
+                StringComparison.OrdinalIgnoreCase));
+        });
+    if (startPair is not null &&
+        endPair is not null &&
+        !string.IsNullOrWhiteSpace(startPair.Value) &&
+        !string.IsNullOrWhiteSpace(endPair.Value) &&
+        TryParsePayslipDate(
+            startPair.Value,
+            out var start) &&
+        TryParsePayslipDate(
+            endPair.Value,
+            out var end))
     {
+        // Use the weaker of the two field confidences.
+        var confidence =
+            Math.Min(
+                startPair.Confidence,
+                endPair.Confidence);
+
         return BuildPayPeriodResult(
             start,
             end,
-            pair.Confidence);
+            confidence);
     }
+    // Strategy 3: Period End containing a range
 
-    // Format 2:
-    // 27/09/2026 - 10/10/2026
-    var dashParts = value.Split(
-        " - ",
-        StringSplitOptions.TrimEntries |
-        StringSplitOptions.RemoveEmptyEntries);
+var periodEndPair = pairs.FirstOrDefault(pair =>
+    NormalizeKey(pair.Key).Equals(
+        "Period End",
+        StringComparison.OrdinalIgnoreCase));
 
-    if (dashParts.Length == 2 &&
-        TryParsePayslipDate(dashParts[0], out start) &&
-        TryParsePayslipDate(dashParts[1], out end))
+if (periodEndPair is not null &&
+    !string.IsNullOrWhiteSpace(periodEndPair.Value))
+{
+    var parsed =
+        TryParsePayPeriodRange(
+            periodEndPair.Value,
+            periodEndPair.Confidence);
+
+    if (parsed.Start is not null &&
+        parsed.End is not null)
     {
-        return BuildPayPeriodResult(
-            start,
-            end,
-            pair.Confidence);
+        return parsed;
     }
+}
 
     return (
         null,
         null,
         null,
-        pair.Confidence);
+        null);
 }
-
 
 private static bool TryParsePayslipDate(
     string value,
     out DateOnly date)
 {
     string[] formats =
-    [
-        "dd-MMM-yyyy",
-        "d-MMM-yyyy",
-        "dd/MM/yyyy",
-        "d/MM/yyyy"
-    ];
+[
+    "dd-MMM-yyyy",
+    "d-MMM-yyyy",
+
+    "dd/MM/yyyy",
+    "d/MM/yyyy",
+
+    "dd.MM.yyyy",
+    "d.MM.yyyy"
+];
 
     return DateOnly.TryParseExact(
         value.Trim(),
@@ -661,24 +711,39 @@ private static (
     }
 
     var payMarkerIndex =
-        Array.FindIndex(
-            lines,
-            line =>
-                line.StartsWith(
-                    "Pay Day",
-                    StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith(
-                    "Pay Date",
-                    StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith(
-                    "Payment Date",
-                    StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith(
-                    "Pay Period",
-                    StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith(
-                    "Employment Details",
-                    StringComparison.OrdinalIgnoreCase));
+    Array.FindIndex(
+        lines,
+        line =>
+            line.StartsWith(
+                "Pay Day",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Pay Date",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Payment Date",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Date Paid",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Pay Period",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Period Starting",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Period Start",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Period Ending",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Period End",
+                StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith(
+                "Employment Details",
+                StringComparison.OrdinalIgnoreCase));
 
     if (payMarkerIndex <= 0)
     {
@@ -828,4 +893,119 @@ private static string SanitizePersonName(
 {
     return SanitizeFilePart(value);
 }
+
+private static (
+    string? Name,
+    string? Source)?
+    ExtractStructuredEmployeeName(
+        IReadOnlyList<DocumentKeyValueResult> pairs)
+{
+    string[] acceptedKeys =
+    [
+        "Employee",
+        "Employee Name",
+        "EmployeeName",
+        "Staff Member",
+        "Payee"
+    ];
+
+    foreach (var pair in pairs)
+    {
+        var normalizedKey =
+            pair.Key
+                .Trim()
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .TrimEnd(':')
+                .Trim();
+
+        bool keyMatches =
+            acceptedKeys.Any(key =>
+                normalizedKey.Equals(
+                    key,
+                    StringComparison.OrdinalIgnoreCase));
+
+        if (!keyMatches)
+            continue;
+
+        if (string.IsNullOrWhiteSpace(pair.Value))
+            continue;
+
+        var candidate =
+            pair.Value.Trim();
+
+        if (LooksLikeOrganisationHeader(candidate))
+            continue;
+
+        var sanitized =
+            ExtractLeadingPersonName(candidate);
+
+        if (!string.IsNullOrWhiteSpace(sanitized))
+        {
+            return (
+                sanitized,
+                $"Structured:{normalizedKey}");
+        }
+    }
+
+        return null;
+    }
+
+    private static string NormalizeKey(
+    string value)
+    {
+        return value
+            .Trim()
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .TrimEnd(':')
+            .Trim();
+    }
+
+    private static (
+    DateOnly? Start,
+    DateOnly? End,
+    string? Label,
+    double? Confidence)
+    TryParsePayPeriodRange(
+        string value,
+        double confidence)
+    {
+    string[] separators =
+    [
+        " to ",
+        " - "
+    ];
+
+    foreach (var separator in separators)
+    {
+        var parts = value.Split(
+            separator,
+            StringSplitOptions.TrimEntries |
+            StringSplitOptions.RemoveEmptyEntries);
+
+        if (parts.Length != 2)
+            continue;
+
+        if (TryParsePayslipDate(
+                parts[0],
+                out var start) &&
+            TryParsePayslipDate(
+                parts[1],
+                out var end))
+        {
+            return BuildPayPeriodResult(
+                start,
+                end,
+                confidence);
+        }
+    }
+
+    return (
+        null,
+        null,
+        null,
+        confidence);
+    }
+
 }
