@@ -38,6 +38,14 @@ public sealed record PayslipAnalysisResult(
     string? EmployeeNameCandidate,
     string? EmployeeNameSource);
 
+public sealed record PayslipNamingResult(
+    bool IsPayslip,
+    bool IsAutoNameCandidate,
+    string? SuggestedFileName,
+    string? EmployeeName,
+    string? PeriodLabel,
+    double? PayPeriodConfidence,
+    string NamingTier);
 
 public sealed class DocumentIntelligenceService
 {
@@ -253,6 +261,122 @@ public async Task<PayslipAnalysisResult>
         EmployeeNameSource: employeeName.Source);
 }
 
+
+public async Task<PayslipNamingResult>
+    AnalyzePayslipForNamingAsync(
+        byte[] documentBytes,
+        string originalFileName,
+        CancellationToken cancellationToken = default)
+{
+    ArgumentNullException.ThrowIfNull(documentBytes);
+
+    if (string.IsNullOrWhiteSpace(originalFileName))
+    {
+        throw new ArgumentException(
+            "Original filename cannot be empty.",
+            nameof(originalFileName));
+    }
+
+    var analysis =
+        await AnalyzePayslipAsync(
+            documentBytes,
+            cancellationToken);
+
+    return BuildPayslipNamingResult(
+        analysis,
+        originalFileName);
+}
+
+public PayslipNamingResult
+    BuildPayslipNamingResult(
+        PayslipAnalysisResult result,
+        string originalFileName)
+{
+    ArgumentNullException.ThrowIfNull(result);
+
+    if (string.IsNullOrWhiteSpace(originalFileName))
+    {
+        throw new ArgumentException(
+            "Original filename cannot be empty.",
+            nameof(originalFileName));
+    }
+
+    if (!result.LooksLikePayslip)
+    {
+        return new PayslipNamingResult(
+            IsPayslip: false,
+            IsAutoNameCandidate: false,
+            SuggestedFileName: null,
+            EmployeeName: null,
+            PeriodLabel: null,
+            PayPeriodConfidence: null,
+            NamingTier: "NotPayslip");
+    }
+
+    bool reliablePeriod =
+        !string.IsNullOrWhiteSpace(result.PeriodLabel) &&
+        result.PayPeriodConfidence >= 0.90;
+
+    bool employeeAvailable =
+        !string.IsNullOrWhiteSpace(
+            result.EmployeeNameCandidate);
+
+    string extension =
+        NormalizeDocumentExtension(
+            Path.GetExtension(originalFileName));
+
+    string? safeEmployee =
+        employeeAvailable
+            ? SanitizePersonName(
+                result.EmployeeNameCandidate!)
+            : null;
+
+    string suggestedFileName;
+    string namingTier;
+
+    if (reliablePeriod &&
+        !string.IsNullOrWhiteSpace(safeEmployee))
+    {
+        suggestedFileName =
+            $"{safeEmployee}_Salary_Slip_{result.PeriodLabel}{extension}";
+
+        namingTier =
+            "EmployeeAndPeriod";
+    }
+    else if (reliablePeriod)
+    {
+        suggestedFileName =
+            $"Salary_Slip_{result.PeriodLabel}{extension}";
+
+        namingTier =
+            "PeriodOnly";
+    }
+    else if (!string.IsNullOrWhiteSpace(safeEmployee))
+    {
+        suggestedFileName =
+            $"{safeEmployee}_Salary_Slip{extension}";
+
+        namingTier =
+            "EmployeeOnly";
+    }
+    else
+    {
+        suggestedFileName =
+            $"Salary_Slip{extension}";
+
+        namingTier =
+            "PayslipOnly";
+    }
+
+    return new PayslipNamingResult(
+        IsPayslip: true,
+        IsAutoNameCandidate: true,
+        SuggestedFileName: suggestedFileName,
+        EmployeeName: result.EmployeeNameCandidate,
+        PeriodLabel: result.PeriodLabel,
+        PayPeriodConfidence: result.PayPeriodConfidence,
+        NamingTier: namingTier);
+}
 
     private static (string? Value, double? Confidence)
         GetStringField(
@@ -683,5 +807,25 @@ private static string?
         return null;
 
     return string.Join(" ", nameTokens);
+}
+
+
+private static string NormalizeDocumentExtension(
+    string? extension)
+{
+    return extension?.ToLowerInvariant() switch
+    {
+        ".pdf" => ".pdf",
+        ".jpg" => ".jpg",
+        ".jpeg" => ".jpeg",
+        ".png" => ".png",
+        _ => ".pdf"
+    };
+}
+
+private static string SanitizePersonName(
+    string value)
+{
+    return SanitizeFilePart(value);
 }
 }

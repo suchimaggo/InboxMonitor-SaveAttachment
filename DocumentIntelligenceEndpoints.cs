@@ -246,6 +246,11 @@ catch (Exception exception)
             StatusCodes.Status500InternalServerError);
 }
 
+    var namingResult =
+    service.BuildPayslipNamingResult(
+        result,
+        file.FileName);
+
 
     var keyValuePairs =
         result.KeyValuePairs
@@ -267,16 +272,19 @@ catch (Exception exception)
     return Results.Ok(new
     {
         success = true,
-        looksLikePayslip = result.LooksLikePayslip,
-        payPeriodStart = result.PayPeriodStart,
+        looksLikePayslip =   result.LooksLikePayslip,
+        isAutoNameCandidate = namingResult.IsAutoNameCandidate,
+        namingTier =   namingResult.NamingTier,
+        suggestedFileName =   namingResult.SuggestedFileName,
+        payPeriodStart =  result.PayPeriodStart,
         payPeriodEnd = result.PayPeriodEnd,
-        periodLabel = result.PeriodLabel,
-        employeeNameCandidate = result.EmployeeNameCandidate,
-        employeeNameSource = result.EmployeeNameSource,
-        payPeriodConfidence = result.PayPeriodConfidence,
+        periodLabel =   result.PeriodLabel,
+        employeeNameCandidate =  result.EmployeeNameCandidate,
+        employeeNameSource =   result.EmployeeNameSource,
+        payPeriodConfidence =  result.PayPeriodConfidence,
         keyValuePairs,
         contentPreview
-    });
+});
 }
 
 
