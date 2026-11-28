@@ -64,7 +64,43 @@ public sealed class InboxMonitor(
         if (settings.PollIntervalSeconds is < 30 or > 3600)
             throw new InvalidOperationException("InboxReader:PollIntervalSeconds must be between 30 and 3600.");
     }
+
+    internal static string BuildZipChildAttachmentKey(
+    string parentAttachmentKey,
+    string entryName,
+    byte[] childBytes)
+{
+    ArgumentException.ThrowIfNullOrWhiteSpace(
+        parentAttachmentKey);
+
+    ArgumentException.ThrowIfNullOrWhiteSpace(
+        entryName);
+
+    ArgumentNullException.ThrowIfNull(
+        childBytes);
+
+    var normalizedEntryName =
+        entryName
+            .Replace('\\', '/')
+            .Trim()
+            .ToLowerInvariant();
+
+    var contentHash =
+        Convert.ToHexString(
+            SHA256.HashData(childBytes));
+
+    var keySource =
+        $"{parentAttachmentKey}|{normalizedEntryName}|{contentHash}";
+
+    return Convert.ToHexString(
+        SHA256.HashData(
+            Encoding.UTF8.GetBytes(
+                keySource)))[..12];
 }
+
+
+
+}// End of InboxMonitor
 
 public sealed class MicrosoftGraphInboxClient(
     HttpClient httpClient,
@@ -258,6 +294,68 @@ if (bytes.LongLength > MaximumAttachmentBytes)
 
     continue;
 }
+
+var downloadedExtension =
+    Path.GetExtension(name);
+
+if (downloadedExtension.Equals(
+        ".zip",
+        StringComparison.OrdinalIgnoreCase))
+{
+    const long maximumZipBytes =
+        25L * 1024 * 1024;
+
+    if (bytes.LongLength > maximumZipBytes)
+    {
+        log(
+            $"[{DateTime.Now:T}] ZIP attachment '{name}' exceeds the 25 MB ZIP limit and was not expanded.");
+
+        // Preserve the original ZIP using the existing
+        // technical-filename fallback.
+    }
+    else
+    {
+        try
+        {
+            var zipSaved =
+                await SaveZipChildrenAsync(
+                    bytes,
+                    attachmentKey,
+                    receivedAt,
+                    messageKey,
+                    destination,
+                    accessToken,
+                    log,
+                    cancellationToken);
+
+            if (zipSaved > 0)
+            {
+                saved += zipSaved;
+
+                log(
+                    $"[{DateTime.Now:T}] ZIP attachment '{name}' produced {zipSaved} saved child document(s).");
+
+                // Children were saved individually.
+                // Do not also save the parent ZIP.
+                continue;
+            }
+
+            log(
+                $"[{DateTime.Now:T}] ZIP attachment '{name}' produced no saved child documents. Preserving the original ZIP as fallback.");
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            log(
+                $"[{DateTime.Now:T}] ZIP processing failed for '{name}'. Preserving the original ZIP as fallback. {exception.Message}");
+        }
+    }
+}
+
 
 // Default to the existing technical filename.
 // Document Intelligence is an enhancement, not a requirement.
@@ -635,6 +733,230 @@ saved++;
         return string.IsNullOrWhiteSpace(safe) ? "attachment" : safe;
     }
 
+
+    private async Task<int> SaveZipChildrenAsync(
+    byte[] zipBytes,
+    string parentAttachmentKey,
+    DateTimeOffset receivedAt,
+    string messageKey,
+    AttachmentDestination destination,
+    string accessToken,
+    Action<string> log,
+    CancellationToken cancellationToken)
+{
+    var extraction =
+        ZipDocumentExtractor.Extract(
+            zipBytes);
+
+    if (!extraction.Success)
+    {
+        log(
+            $"[{DateTime.Now:T}] ZIP extraction failed. {extraction.Error}");
+
+        return 0;
+    }
+
+    var saved =
+        0;
+
+    foreach (var document in extraction.Documents)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            var childKey =
+                InboxMonitor.BuildZipChildAttachmentKey(
+                    parentAttachmentKey,
+                    document.EntryName,
+                    document.Content);
+
+            var childSaved =
+                await ProcessAndUploadDocumentAsync(
+                    document.Content,
+                    document.EntryName,
+                    childKey,
+                    receivedAt,
+                    messageKey,
+                    destination,
+                    accessToken,
+                    log,
+                    cancellationToken);
+
+            if (childSaved)
+            {
+                saved++;
+            }
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            log(
+                $"[{DateTime.Now:T}] ZIP child '{document.EntryName}' failed and was skipped. {exception.Message}");
+        }
+    }
+
+    return saved;
+}
+
+
+
+    private async Task<bool> ProcessAndUploadDocumentAsync(
+    byte[] bytes,
+    string originalFileName,
+    string documentKey,
+    DateTimeOffset receivedAt,
+    string messageKey,
+    AttachmentDestination destination,
+    string accessToken,
+    Action<string> log,
+    CancellationToken cancellationToken)
+{
+    ArgumentNullException.ThrowIfNull(bytes);
+    ArgumentException.ThrowIfNullOrWhiteSpace(
+        originalFileName);
+    ArgumentException.ThrowIfNullOrWhiteSpace(
+        documentKey);
+
+    if (await DestinationContainsAttachmentKeyAsync(
+            destination.FolderPath,
+            documentKey,
+            accessToken,
+            cancellationToken))
+    {
+        return false;
+    }
+
+    var safeOriginalFileName =
+        Sanitize(
+            originalFileName,
+            140);
+
+    var technicalFileName =
+        Sanitize(
+            $"{receivedAt.UtcDateTime:yyyyMMdd_HHmmss}_{messageKey}_{documentKey}_{safeOriginalFileName}",
+            180);
+
+    var technicalFilePath =
+        $"{destination.FolderPath}/{technicalFileName}";
+
+    if (await DriveItemExistsAsync(
+            technicalFilePath,
+            accessToken,
+            cancellationToken))
+    {
+        return false;
+    }
+
+    var finalFileName =
+        technicalFileName;
+
+    const long maximumDocumentIntelligenceBytes =
+        4L * 1024 * 1024;
+
+    var extension =
+        Path.GetExtension(
+            safeOriginalFileName);
+
+    var documentIntelligenceEligible =
+        bytes.LongLength > 0 &&
+        bytes.LongLength <= maximumDocumentIntelligenceBytes &&
+        extension is not null &&
+        (
+            extension.Equals(
+                ".pdf",
+                StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(
+                ".jpg",
+                StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(
+                ".jpeg",
+                StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(
+                ".png",
+                StringComparison.OrdinalIgnoreCase)
+        );
+
+    if (documentIntelligenceEligible)
+    {
+        try
+        {
+            var processing =
+                await documentIntelligence
+                    .AnalyzeDocumentForNamingAsync(
+                        bytes,
+                        safeOriginalFileName,
+                        cancellationToken);
+
+            if (processing.IsAutoNameCandidate &&
+                !string.IsNullOrWhiteSpace(
+                    processing.SuggestedFileName))
+            {
+                var suggestedExtension =
+                    Path.GetExtension(
+                        processing.SuggestedFileName);
+
+                var suggestedBaseName =
+                    Path.GetFileNameWithoutExtension(
+                        processing.SuggestedFileName);
+
+                var requiredSuffix =
+                    $"_{documentKey}{suggestedExtension}";
+
+                var maximumBaseNameLength =
+                    180 - requiredSuffix.Length;
+
+                suggestedBaseName =
+                    Sanitize(
+                        suggestedBaseName,
+                        maximumBaseNameLength);
+
+                finalFileName =
+                    $"{suggestedBaseName}{requiredSuffix}";
+
+                log(
+                    $"[{DateTime.Now:T}] Document Intelligence classified '{safeOriginalFileName}' as '{processing.DetectedDocumentType}' and suggested '{finalFileName}'.");
+            }
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            log(
+                $"[{DateTime.Now:T}] Document Intelligence processing failed for '{safeOriginalFileName}'. Using technical fallback. {exception.Message}");
+
+            finalFileName =
+                technicalFileName;
+        }
+    }
+
+    var finalFilePath =
+        $"{destination.FolderPath}/{finalFileName}";
+
+    if (await DriveItemExistsAsync(
+            finalFilePath,
+            accessToken,
+            cancellationToken))
+    {
+        return false;
+    }
+
+    await UploadFileAsync(
+        finalFilePath,
+        bytes,
+        accessToken,
+        cancellationToken);
+
+    return true;
+}
+
     private static string Limit(string value)
     {
         var text = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
@@ -647,4 +969,5 @@ saved++;
     {
         public HttpStatusCode GraphStatusCode { get; } = statusCode;
     }
-}
+
+} // End of MicrosoftGraphInboxClient

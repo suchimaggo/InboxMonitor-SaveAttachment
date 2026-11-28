@@ -40,6 +40,50 @@
 
 <pre id="payslipResult"></pre>
 
+
+<hr>
+
+<h2>Australian Bank Statement Test</h2>
+
+<p>
+    Upload one authorised/redacted Australian bank
+    or credit-card statement.
+</p>
+
+<input id="bankStatementFile"
+       type="file"
+       accept=".pdf,.jpg,.jpeg,.png">
+
+<button id="bankStatementButton">
+    Run bank statement test
+</button>
+
+<pre id="bankStatementResult"></pre>
+
+<hr>
+
+<h2>Document ZIP Test</h2>
+
+<p>
+    Upload one ZIP containing authorised/redacted client documents.
+    This test extracts supported files only and does not save or analyse them.
+</p>
+
+<input id="zipFile"
+       type="file"
+       accept=".zip">
+
+<button id="zipButton">
+    Run ZIP test
+</button>
+
+<button id="zipProcessButton">
+    Run ZIP processing test
+</button>
+
+<pre id="zipResult"></pre>
+
+
     <script>
         const button = document.getElementById("testButton");
         const fileInput = document.getElementById("file");
@@ -148,6 +192,220 @@ payslipButton.addEventListener("click", async () => {
             "Request failed: " + error;
     }
 });
+
+// Bank statement test
+const bankStatementButton =
+    document.getElementById("bankStatementButton");
+
+const bankStatementFile =
+    document.getElementById("bankStatementFile");
+
+const bankStatementResult =
+    document.getElementById("bankStatementResult");
+
+bankStatementButton.addEventListener(
+    "click",
+    async () => {
+
+        const file =
+            bankStatementFile.files[0];
+
+        if (!file) {
+            bankStatementResult.textContent =
+                "Please select a bank statement.";
+            return;
+        }
+
+        if (file.size > 4 * 1024 * 1024) {
+            bankStatementResult.textContent =
+                "File is over the 4 MB pilot limit.";
+            return;
+        }
+
+        const data =
+            new FormData();
+
+        data.append(
+            "file",
+            file);
+
+        bankStatementResult.textContent =
+            "Analyzing bank statement...";
+
+        try {
+            const response =
+                await fetch(
+                    "/api/document-intelligence/bank-statement-test",
+                    {
+                        method: "POST",
+                        body: data
+                    });
+
+            const text =
+                await response.text();
+
+            bankStatementResult.textContent =
+                "HTTP " +
+                response.status +
+                "\n\n" +
+                text;
+        }
+        catch (error) {
+            bankStatementResult.textContent =
+                "Request failed: " +
+                error;
+        }
+    });
+
+
+    const zipButton =
+    document.getElementById("zipButton");
+
+const zipFile =
+    document.getElementById("zipFile");
+
+const zipResult =
+    document.getElementById("zipResult");
+
+zipButton.addEventListener(
+    "click",
+    async () => {
+
+        const file =
+            zipFile.files[0];
+
+        if (!file) {
+            zipResult.textContent =
+                "Please select a ZIP file.";
+            return;
+        }
+
+        const maximumZipBytes =
+            25 * 1024 * 1024;
+
+        if (file.size > maximumZipBytes) {
+            zipResult.textContent =
+                "ZIP is over the 25 MB pilot limit.";
+            return;
+        }
+
+        if (!file.name
+                .toLowerCase()
+                .endsWith(".zip")) {
+            zipResult.textContent =
+                "Please select a .zip file.";
+            return;
+        }
+
+        const data =
+            new FormData();
+
+        data.append(
+            "file",
+            file);
+
+        zipResult.textContent =
+            "Checking ZIP...";
+
+        try {
+            const response =
+                await fetch(
+                    "/api/document-intelligence/zip-test",
+                    {
+                        method: "POST",
+                        body: data
+                    });
+
+            const text =
+                await response.text();
+
+            zipResult.textContent =
+                "HTTP " +
+                response.status +
+                "\n\n" +
+                text;
+        }
+        catch (error) {
+            zipResult.textContent =
+                "Request failed: " +
+                error;
+        }
+    });
+
+    const zipProcessButton =
+    document.getElementById("zipProcessButton");
+
+zipProcessButton.addEventListener(
+    "click",
+    async () => {
+
+        const file =
+            zipFile.files[0];
+
+        if (!file) {
+            zipResult.textContent =
+                "Please select a ZIP file.";
+            return;
+        }
+
+        const maximumZipBytes =
+            25 * 1024 * 1024;
+
+        if (file.size > maximumZipBytes) {
+            zipResult.textContent =
+                "ZIP is over the 25 MB pilot limit.";
+            return;
+        }
+
+        if (!file.name
+                .toLowerCase()
+                .endsWith(".zip")) {
+            zipResult.textContent =
+                "Please select a .zip file.";
+            return;
+        }
+
+        const data =
+            new FormData();
+
+        data.append(
+            "file",
+            file);
+
+        zipResult.textContent =
+            "Extracting and processing ZIP documents...";
+
+        zipButton.disabled = true;
+        zipProcessButton.disabled = true;
+
+        try {
+            const response =
+                await fetch(
+                    "/api/document-intelligence/zip-process-test",
+                    {
+                        method: "POST",
+                        body: data
+                    });
+
+            const text =
+                await response.text();
+
+            zipResult.textContent =
+                "HTTP " +
+                response.status +
+                "\n\n" +
+                text;
+        }
+        catch (error) {
+            zipResult.textContent =
+                "Request failed: " +
+                error;
+        }
+        finally {
+            zipButton.disabled = false;
+            zipProcessButton.disabled = false;
+        }
+    });
     </script>
 </body>
 </html>
